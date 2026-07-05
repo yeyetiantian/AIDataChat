@@ -2,29 +2,6 @@
   <div class="board-view">
     <section class="board-workspace">
       <div class="board-main">
-        <div v-if="previewResult && !selectedBoard" class="preview-panel">
-          <div class="preview-header">
-            <div class="preview-copy">
-              <strong>当前预览</strong>
-              <span>通过右侧透视表配置生成，可直接保存到看板</span>
-            </div>
-            <div class="preview-actions">
-              <el-button size="small" @click="clearPreview">清空预览</el-button>
-              <el-button size="small" type="primary" @click="openSaveDialog">保存到看板</el-button>
-            </div>
-          </div>
-          <div class="preview-chart">
-            <VegaLiteRenderer
-              :data="previewResult.data"
-              :config="previewConfig"
-              :chart-type="previewConfig?.chart_type || 'bar'"
-              :columns="previewResult.columns"
-              :sql="previewResult.sql"
-              :execution-time-ms="previewResult.execution_time_ms"
-            />
-          </div>
-        </div>
-
         <div class="board-list-wrap">
           <ChartBoard
             :selected-card-key="selectedBoardKey"
@@ -36,7 +13,12 @@
 
       <aside class="board-sidebar" :class="{ 'is-open': showConfigPanel }">
         <div class="board-sidebar-inner">
-          <ConfigPanel ref="configPanelRef" v-if="showConfigPanel" :api="pivotApi" />
+          <div class="board-sidebar-content">
+            <ConfigPanel ref="configPanelRef" v-if="showConfigPanel" :api="pivotApi" />
+          </div>
+          <div v-if="showConfigPanel" class="board-sidebar-footer">
+            <el-button size="small" type="danger" @click="closeConfigPanel">关闭配置</el-button>
+          </div>
         </div>
       </aside>
     </section>
@@ -64,21 +46,6 @@
       <AIDialog @save="handleSaveToBoard" />
     </el-dialog>
 
-    <el-dialog v-model="showSaveDialog" title="保存到看板" width="400px">
-      <el-form label-position="top">
-        <el-form-item label="图表名称">
-          <el-input v-model="saveTitle" placeholder="输入图表名称" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="saveDesc" type="textarea" :rows="2" placeholder="可选" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showSaveDialog = false">取消</el-button>
-        <el-button type="primary" :loading="chartStore.loading" @click="handlePreviewSave">保存</el-button>
-      </template>
-    </el-dialog>
-
     <el-dialog v-model="showCreateDialog" title="新增看板" width="420px">
       <el-form label-position="top">
         <el-form-item label="看板名称">
@@ -102,11 +69,11 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
 import type { SavedChart } from '@/stores/useChartStore'
-import type { PivotConfig, PivotResponse } from '@/types'
+import type { PivotConfig } from '@/types'
 import ChartBoard from '@/components/ChartBoard.vue'
 import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
-import VegaLiteRenderer from '@/components/VegaLiteRenderer.vue'
+import { createMockBoardCharts } from '@/constants/mockBoardCharts'
 import { ChatDotRound } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -125,17 +92,17 @@ type ToggleBoardCard = SavedChart | {
 
 const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
-const previewResult = ref<PivotResponse | null>(null)
-const previewConfig = ref<any>(null)
-const showSaveDialog = ref(false)
 const showCreateDialog = ref(false)
-const saveTitle = ref('')
-const saveDesc = ref('')
 const createTitle = ref('空白看板')
 const createDesc = ref('')
 const selectedBoardKey = ref<string | number | null>(null)
 const configPanelRef = ref<ConfigPanelHandle | null>(null)
 const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
+
+function closeConfigPanel() {
+  showConfigPanel.value = false
+  selectedBoardKey.value = null
+}
 
 function loadToAnalysis(chart: SavedChart) {
   void chart
@@ -143,7 +110,11 @@ function loadToAnalysis(chart: SavedChart) {
 }
 
 async function pivotApi(config: any) {
-  previewConfig.value = config
+  if (!selectedBoard.value) {
+    ElMessage.warning('请先选择左侧看板，再执行查询')
+    return
+  }
+
   try {
     const resp = await fetch('/api/pivot', {
       method: 'POST',
@@ -156,15 +127,12 @@ async function pivotApi(config: any) {
       throw new Error(err.detail || '查询失败')
     }
 
-    const result: PivotResponse = await resp.json()
-    previewResult.value = result
-    if (selectedBoard.value) {
-      await chartStore.updateChart(selectedBoard.value.id, {
-        pivot_config: config,
-        chart_type: config?.chart_type || 'bar',
-        data: result.data || [],
-      })
-    }
+    const result = await resp.json()
+    await chartStore.updateChart(selectedBoard.value.id, {
+      pivot_config: config,
+      chart_type: config?.chart_type || 'bar',
+      data: result.data || [],
+    })
   } catch (e: any) {
     ElMessage.error(e.message || '查询失败')
   }
@@ -177,40 +145,6 @@ async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | '
     return
   }
   showAiDialog.value = false
-}
-
-function clearPreview() {
-  previewResult.value = null
-  previewConfig.value = null
-}
-
-function openSaveDialog() {
-  if (!previewResult.value || !previewConfig.value) return
-  if (!saveTitle.value.trim()) {
-    saveTitle.value = selectedBoard.value?.title || '未命名图表'
-  }
-  showSaveDialog.value = true
-}
-
-async function handlePreviewSave() {
-  if (!previewResult.value || !previewConfig.value || !saveTitle.value.trim()) return
-
-  const saved = await chartStore.saveChart(
-    saveTitle.value,
-    previewConfig.value as PivotConfig,
-    saveDesc.value,
-    previewConfig.value?.chart_type || 'bar',
-    previewResult.value.data,
-  )
-
-  if (!saved) {
-    ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
-    return
-  }
-
-  showSaveDialog.value = false
-  saveTitle.value = ''
-  saveDesc.value = ''
 }
 
 function openCreateDialog() {
@@ -255,10 +189,6 @@ async function handleCreateBoard() {
   }
 
   selectedBoardKey.value = created.id
-  previewResult.value = null
-  previewConfig.value = null
-  saveTitle.value = ''
-  saveDesc.value = ''
   showCreateDialog.value = false
   showConfigPanel.value = true
   await syncConfigPanel(created)
@@ -289,8 +219,7 @@ async function handleToggleConfig(chart: ToggleBoardCard) {
   const isSameCard = selectedBoardKey.value === nextKey
 
   if (isSameCard && showConfigPanel.value) {
-    showConfigPanel.value = false
-    selectedBoardKey.value = null
+    closeConfigPanel()
     return
   }
 
@@ -309,12 +238,58 @@ function handleCreateRequest() {
   openCreateDialog()
 }
 
+async function handleMockDataRequest() {
+  await chartStore.fetchCharts()
+
+  if (chartStore.charts.length > 0) {
+    ElMessage.warning('请先清空现有看板，再生成 6 种模拟图表数据')
+    return
+  }
+
+  const mockCharts = createMockBoardCharts()
+  let createdCount = 0
+  let firstCreatedId: number | null = null
+
+  for (const mockChart of mockCharts) {
+    const created = await chartStore.saveChart(
+      mockChart.title,
+      mockChart.pivotConfig,
+      mockChart.description,
+      mockChart.chartType,
+      mockChart.data,
+    )
+
+    if (!created) {
+      ElMessage.warning(chartStore.error || '模拟数据生成失败')
+      break
+    }
+
+    createdCount += 1
+    if (firstCreatedId == null) {
+      firstCreatedId = created.id
+    }
+  }
+
+  if (createdCount === mockCharts.length) {
+    selectedBoardKey.value = firstCreatedId
+    showConfigPanel.value = false
+    ElMessage.success('已生成 6 种模拟图表数据')
+    return
+  }
+
+  if (createdCount > 0) {
+    ElMessage.warning(`已生成 ${createdCount} 张模拟图表，剩余图表未完成`)
+  }
+}
+
 onMounted(() => {
   window.addEventListener('board:create', handleCreateRequest)
+  window.addEventListener('board:mock-data', handleMockDataRequest)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('board:create', handleCreateRequest)
+  window.removeEventListener('board:mock-data', handleMockDataRequest)
 })
 </script>
 
@@ -342,52 +317,6 @@ onBeforeUnmount(() => {
   transition: all 0.24s ease;
 }
 
-.preview-panel {
-  margin: 12px 12px 0;
-  background: #ffffff;
-  border: 1px solid #e8edf5;
-  border-radius: 14px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid #edf2f7;
-}
-
-.preview-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.preview-copy strong {
-  font-size: 15px;
-  color: #303133;
-}
-
-.preview-copy span {
-  font-size: 12px;
-  color: #909399;
-}
-
-.preview-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.preview-chart {
-  height: 380px;
-  padding: 0 16px 16px;
-}
-
 .board-list-wrap {
   flex: 1;
   min-height: 0;
@@ -412,7 +341,24 @@ onBeforeUnmount(() => {
   width: 368px;
   height: 100%;
   padding: 10px 10px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.board-sidebar-content {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+
+.board-sidebar-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0 4px;
+  border-top: 1px solid #e4e7ed;
+  padding-top: 10px;
 }
 
 .board-ai-button {
@@ -424,14 +370,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1100px) {
-  .preview-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .preview-chart {
-    height: 320px;
-  }
 }
 
 @media (max-width: 960px) {

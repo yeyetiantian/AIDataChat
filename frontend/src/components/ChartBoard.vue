@@ -1,17 +1,17 @@
 <template>
   <div class="chart-board">
-    <div class="board-header">
+    <!-- <div class="board-header">
       <h3>📋 我的看板</h3>
       <span class="board-tip">最多 6 个看板，每行 3 个</span>
-    </div>
+    </div> -->
 
     <div v-if="store.loading" class="board-loading">
       <el-skeleton :rows="3" animated />
     </div>
 
     <div v-else-if="boardCards.length === 0" class="board-empty">
-      <el-empty description="还没有保存的图表，在分析页面点击「保存到看板」">
-        <el-button type="primary" size="small" @click="router.push('/set')">去分析</el-button>
+      <el-empty description="还没有保存的图表，请先新增">
+        <!-- <el-button type="primary" size="small" @click="router.push('/set')">去分析</el-button> -->
       </el-empty>
     </div>
 

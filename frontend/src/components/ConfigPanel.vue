@@ -86,7 +86,7 @@
                     size="small"
                     class="filter-value-select"
                     placeholder="选择值"
-                    @update:model-value="(val) => onFilterMultiChange(item, val)"
+                    @update:model-value="(val: string[]) => onFilterMultiChange(item, val)"
                   >
                     <el-option
                       v-for="opt in getFilterOptions(item.field)"
@@ -193,7 +193,7 @@
         </div>
 
         <!-- HAVING 设置 -->
-        <div class="having-section">
+        <div v-if="false" class="having-section">
           <div class="having-head">
             <label>HAVING</label>
             <el-button size="small" link type="primary" @click="addHaving">+ 添加</el-button>
