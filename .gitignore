@@ -1,0 +1,47 @@
+# ─── Python ───
+backend/.venv/
+backend/__pycache__/
+backend/*/__pycache__/
+backend/agents/__pycache__/
+backend/core/__pycache__/
+backend/models/__pycache__/
+backend/routers/__pycache__/
+*.pyc
+*.pyo
+backend/duckdb_temp/
+backend/agent_logs/*.json
+backend/data/
+
+# ─── 环境变量 ───
+.env
+
+# ─── Node / Frontend ───
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.history/
+
+# ─── 编辑器历史 ───
+.history/
+
+
+# ─── 数据库 ───
+*.db
+*.db.wal
+
+# ─── IDE / 编辑器 ───
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.history/
+
+# ─── OS ───
+.DS_Store
+Thumbs.db
+
+# ─── 日志 / 临时文件 ───
+*.log
+/tmp/

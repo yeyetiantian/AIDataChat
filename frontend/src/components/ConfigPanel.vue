@@ -1,0 +1,635 @@
+<template>
+  <div class="config-panel">
+    <!-- 字段列表（固定字段 + 信号字段并排，不收拢） -->
+    <div class="panel-section">
+      <div class="section-header">
+        <span class="section-title">透视表配置</span>
+      </div>
+      <div class="section-body">
+        <div class="field-search">
+          <el-input v-model="search" placeholder="搜索字段..." size="small" clearable prefix-icon="Search" />
+        </div>
+        <div class="field-groups-row">
+          <div v-for="group in filteredGroups" :key="group.table_name" class="field-group-col">
+            <div class="field-group-label">
+              <span>{{ group.table_name_cn }}</span>
+              <el-tag size="small" type="info" round>{{ group.fields.length }}</el-tag>
+            </div>
+            <div class="field-items">
+              <div
+                v-for="field in group.fields" :key="field.name"
+                class="field-item" draggable="true"
+                @dragstart="onDragStart($event, field)"
+              >
+                <span class="field-name">{{ field.alias_cn }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section config-section">
+      <div class="section-body config-body">
+        <!-- 四象限拖拽区 2x2 网格 -->
+          <!-- 筛选器 -->
+          <div class="zone-card" @dragover.prevent @drop="onDrop($event, 'filters')">
+            <div class="zone-label">
+              <el-icon size="14"><Filter /></el-icon> 筛选器 <el-tag v-if="filters.length" size="small" round>{{ filters.length }}</el-tag>
+            </div>
+            <div class="zone-body" :class="{ empty: filters.length === 0 }">
+              <div v-if="filters.length === 0" class="zone-placeholder">拖入字段</div>
+              <div v-for="(item, i) in filters" :key="i" class="zone-item">
+                <span class="zone-item-field">{{ item.field }}</span>
+                <el-select v-model="item.op" size="small" style="width:70px">
+                  <el-option label="=" value="=" /><el-option label="!=" value="!=" />
+                  <el-option label=">" value=">" /><el-option label=">=" value=">=" />
+                  <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
+                  <el-option label="between" value="between" /><el-option label="in" value="in" />
+                </el-select>
+                <el-input v-if="item.op !== 'between'" v-model="item.value" size="small" style="width:70px" placeholder="值" />
+                <div v-else class="between-inputs">
+                  <el-input v-model="item.value[0]" size="small" style="width:50px" /><span>~</span>
+                  <el-input v-model="item.value[1]" size="small" style="width:50px" />
+                </div>
+                <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'filters')" />
+              </div>
+            </div>
+          </div>
+        <div class="zones-grid">
+          <!-- 轴 -->
+          <div class="zone-card" @dragover.prevent @drop="onDrop($event, 'axes')">
+            <div class="zone-label">
+              <el-icon size="14"><DataAnalysis /></el-icon> 轴 <el-tag v-if="axes.length" size="small" round>{{ axes.length }}</el-tag>
+            </div>
+            <div class="zone-body" :class="{ empty: axes.length === 0 }">
+              <div v-if="axes.length === 0" class="zone-placeholder">拖入字段</div>
+              <div v-for="(item, i) in axes" :key="i" class="zone-item">
+                <span class="zone-item-field">{{ item.alias || item.field }}</span>
+                <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'axes')" />
+              </div>
+            </div>
+          </div>
+          <!-- 图例 -->
+          <div class="zone-card" @dragover.prevent @drop="onDrop($event, 'legend')">
+            <div class="zone-label">
+              <el-icon size="14"><PieChart /></el-icon> 图例 <el-tag v-if="legend.length" size="small" round>{{ legend.length }}</el-tag>
+            </div>
+            <div class="zone-body" :class="{ empty: legend.length === 0 }">
+              <div v-if="legend.length === 0" class="zone-placeholder">拖入字段</div>
+              <div v-for="(item, i) in legend" :key="i" class="zone-item">
+                <span class="zone-item-field">{{ item.alias || item.field }}</span>
+                <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'legend')" />
+              </div>
+            </div>
+          </div>
+          
+        </div>
+<!-- 值 -->
+          <div class="zone-card value" @dragover.prevent @drop="onDrop($event, 'values')">
+            <div class="zone-label">
+              <el-icon size="14"><Histogram /></el-icon> 值 <el-tag v-if="values.length" size="small" round>{{ values.length }}</el-tag>
+            </div>
+            <div class="zone-body" :class="{ empty: values.length === 0 }">
+              <div v-if="values.length === 0" class="zone-placeholder">拖入字段</div>
+              <div v-for="(item, i) in values" :key="i" class="zone-item">
+                <span class="zone-item-field">{{ item.alias || item.field }}</span>
+                <el-select v-model="item.aggregation" size="small" style="width:65px">
+                  <el-option label="计数" value="count" /><el-option label="求和" value="sum" />
+                  <el-option label="平均" value="avg" /><el-option label="最大" value="max" /><el-option label="最小" value="min" />
+                </el-select>
+                <el-select v-model="showAsMap[i]" size="small" style="width:75px" placeholder="显示" @change="(v:string) => onShowAsChange(i, v)">
+                  <el-option label="原值" value="normal" />
+                  <el-option label="列占比" value="column_percentage" />
+                  <el-option label="占比" value="total_percentage" />
+                  <el-option label="累计" value="running_total" />
+                  <el-option label="排名" value="rank_desc" />
+                </el-select>
+                <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'values')" />
+              </div>
+            </div>
+          </div>
+        <!-- 排序 + Limit（在按钮上方） -->
+        <div class="extra-row">
+          <div class="extra-item">
+            <label>排序</label>
+            <el-select v-model="sortField" size="small" clearable placeholder="字段" style="width:100px">
+              <el-option v-for="o in sortOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+            <el-select v-model="sortDir" size="small" style="width:60px">
+              <el-option label="降序" value="desc" />
+              <el-option label="升序" value="asc" />
+            </el-select>
+          </div>
+          <div class="extra-item">
+            <label>Limit</label>
+            <el-input-number v-model="limitVal" :min="1" :max="100000" size="small" controls-position="right" style="width:90px" />
+          </div>
+          <div class="extra-item">
+            <label>图表</label>
+            <el-select v-model="chartType" size="small" style="width:90px">
+              <el-option label="柱状图" value="bar" />
+              <el-option label="折线图" value="line" />
+              <el-option label="波形图" value="area" />
+              <el-option label="散点图" value="point" />
+              <el-option label="饼状图" value="pie" />
+              <el-option label="雷达图" value="radar" />
+            </el-select>
+          </div>
+        </div>
+
+        <!-- HAVING 设置 -->
+        <div class="having-section">
+          <div class="having-head">
+            <label>HAVING</label>
+            <el-button size="small" link type="primary" @click="addHaving">+ 添加</el-button>
+          </div>
+          <div class="having-items">
+<div v-if="having.length === 0" class="having-empty">无 HAVING 条件</div>
+            <div v-for="(h, i) in having" :key="i" class="having-row">
+              <el-input v-model="h.field" size="small" placeholder="字段/别名" style="width:80px" />
+              <el-select v-model="h.op" size="small" style="width:60px">
+                <el-option label="=" value="=" /><el-option label="!=" value="!=" />
+                <el-option label=">" value=">" /><el-option label=">=" value=">=" />
+                <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
+              </el-select>
+              <el-input v-model="h.value" size="small" placeholder="值" style="width:80px" />
+              <el-button size="small" type="danger" :icon="Delete" circle @click="removeHaving(i)" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 操作按钮（在最下边） -->
+        <div class="zone-actions">
+          <el-button size="small" type="primary" :loading="loading" @click="handleQuery">查询</el-button>
+          <el-button size="small" @click="handleClear">清空</el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, toRef, onMounted } from 'vue'
+import { Filter, DataAnalysis, PieChart, Histogram, Delete } from '@element-plus/icons-vue'
+import type { FieldDef, ZoneType, FilterItem, AxisItem, LegendItem, ValueItem } from '@/types'
+
+export interface TableGroup {
+  table_name: string
+  table_name_cn: string
+  fields: FieldDef[]
+}
+
+// ========== 唯一外部参数 ==========
+const props = defineProps<{
+  api: (config: any) => Promise<any>
+}>()
+
+// ========== stateData：全部内部状态 ==========
+const stateData = reactive({
+  // 字段列表
+  groups: [] as TableGroup[],
+  // 四象限
+  filters: [] as FilterItem[],
+  axes: [] as AxisItem[],
+  legend: [] as LegendItem[],
+  values: [] as ValueItem[],
+  // 排序 / Limit / HAVING / 图表类型
+  sortField: '',
+  sortDir: 'desc' as string,
+  limitVal: 10000,
+  having: [] as { field: string; op: string; value: any }[],
+  chartType: 'bar' as string,
+  // 搜索
+  search: '',
+  // 显示方式
+  showAsMap: {} as Record<number, string>,
+  // 加载状态
+  loading: false,
+})
+
+// 模板别名（使 template 中直接使用 filters、axes 等变量名）
+const filters = stateData.filters as FilterItem[]
+const axes = stateData.axes as AxisItem[]
+const legend = stateData.legend as LegendItem[]
+const values = stateData.values as ValueItem[]
+const loading = computed(() => stateData.loading)
+const search = toRef(stateData, 'search')
+const showAsMap = stateData.showAsMap as Record<number, string>
+
+// sortField / sortDir / limitVal / chartType（v-model 需要 ref）
+const sortField = toRef(stateData, 'sortField')
+const sortDir = toRef(stateData, 'sortDir')
+const limitVal = toRef(stateData, 'limitVal')
+const chartType = toRef(stateData, 'chartType')
+const having = toRef(stateData, 'having')
+
+// 排序选项（从 axes + values 推导）
+const sortOptions = computed(() => [
+  ...stateData.axes.map(a => ({ label: a.alias || a.field, value: a.alias || a.field })),
+  ...stateData.values.map(v => ({ label: v.alias || `${v.aggregation?.toUpperCase() || ''}(${v.field})`, value: v.alias || v.field })),
+])
+
+// 字段列表筛选
+const filteredGroups = computed(() => {
+  if (!stateData.search) return stateData.groups
+  const q = stateData.search.toLowerCase()
+  return stateData.groups.map(g => ({
+    ...g,
+    fields: g.fields.filter(f =>
+      f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q)
+    ),
+  })).filter(g => g.fields.length > 0)
+})
+
+// ========== 方法 ==========
+
+function addHaving() {
+  stateData.having.push({ field: '', op: '>=', value: '' })
+}
+function removeHaving(index: number) {
+  stateData.having.splice(index, 1)
+}
+
+function onShowAsChange(index: number, val: string) {
+  const item = stateData.values[index]
+  if (item) {
+    item.show_as = val === 'normal' ? undefined : { type: val as any }
+  }
+}
+
+function onDragStart(event: DragEvent, field: FieldDef) {
+  event.dataTransfer?.setData('application/json', JSON.stringify({
+    name: field.name, alias_cn: field.alias_cn, category: field.category, data_type: field.data_type,
+  }))
+  event.dataTransfer!.effectAllowed = 'move'
+}
+
+function onDrop(event: DragEvent, zone: ZoneType) {
+  const raw = event.dataTransfer?.getData('application/json')
+  if (!raw) return
+  const field: FieldDef = JSON.parse(raw)
+  const item = { field: field.name, alias: field.alias_cn }
+  if (zone === 'filters') {
+    stateData.filters.push({ field: field.name, op: '=', value: '' })
+  } else if (zone === 'axes') {
+    stateData.axes.push({ field: field.name, alias: field.alias_cn, sort: 'asc' })
+  } else if (zone === 'legend') {
+    stateData.legend.push({ field: field.name, alias: field.alias_cn })
+  } else if (zone === 'values') {
+    const id = `val_${stateData.values.length + 1}`
+    const isMeasure = field.category === 'measure'
+    stateData.values.push({
+      id, field: field.name,
+      aggregation: isMeasure ? 'sum' : 'count',
+      alias: field.alias_cn,
+    })
+  }
+}
+
+function removeItem(index: number, zone: ZoneType) {
+  const arr = ({
+    filters: stateData.filters,
+    axes: stateData.axes,
+    legend: stateData.legend,
+    values: stateData.values,
+  } as const)[zone]
+  if (arr) arr.splice(index, 1)
+}
+
+async function handleQuery() {
+  stateData.loading = true
+  try {
+    const config = {
+      filters: stateData.filters,
+      axes: stateData.axes.map(a => ({ field: a.field, alias: a.alias })),
+      legend: stateData.legend.map(l => ({ field: l.field, alias: l.alias })),
+      values: stateData.values.map(v => ({
+        id: v.id, field: v.field, aggregation: v.aggregation,
+        alias: v.alias, show_as: v.show_as,
+      })),
+      order_by: stateData.sortField ? [{ field: stateData.sortField, direction: stateData.sortDir }] : [],
+      limit: stateData.limitVal,
+      having: stateData.having.map(h => ({ field: h.field, op: h.op, value: h.value })),
+      chart_type: stateData.chartType,
+      grand_total: false,
+      subtotals: false,
+    }
+    await props.api(config)
+  } finally {
+    stateData.loading = false
+  }
+}
+
+function handleClear() {
+  stateData.filters = []
+  stateData.axes = []
+  stateData.legend = []
+  stateData.values = []
+  stateData.sortField = ''
+  stateData.sortDir = 'desc'
+  stateData.limitVal = 10000
+  stateData.having = []
+}
+
+// ========== 暴露给父组件的方法 ==========
+defineExpose({
+  setDefaultValues: (config: { filters?: FilterItem[]; axes?: AxisItem[]; legend?: LegendItem[]; values?: ValueItem[] }) => {
+    if (config.filters) stateData.filters = config.filters
+    if (config.axes) stateData.axes = config.axes
+    if (config.legend) stateData.legend = config.legend
+    if (config.values) stateData.values = config.values
+  },
+})
+
+// ========== 初始化：获取字段列表 ==========
+onMounted(async () => {
+  try {
+    const resp = await fetch('/api/fields')
+    if (resp.ok) {
+      stateData.groups = await resp.json()
+    }
+  } catch (e) {
+    console.error('[ConfigPanel] 获取字段列表失败', e)
+  }
+})
+</script>
+
+<style scoped>
+.config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100%;
+}
+
+.panel-section {
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: #fafafa;
+  border-bottom: 1px solid #ebeef5;
+}
+.section-header:hover {
+  background: #f0f2f5;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.section-toggle {
+  font-size: 10px;
+  color: #c0c4cc;
+}
+
+.section-body {
+  padding: 6px 10px 10px;
+}
+
+.config-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 字段列表内联样式 */
+.field-search {
+  padding-bottom: 6px;
+}
+
+.field-groups-row {
+  display: flex;
+  gap: 8px;
+}
+
+.field-group-col {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #f2f3f5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.field-group-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #303133;
+  background: #fafafa;
+  border-bottom: 1px solid #f2f3f5;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.field-group-label:hover {
+  background: #f0f2f5;
+}
+
+.group-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.group-arrow {
+  font-size: 10px;
+  color: #c0c4cc;
+}
+
+.field-items {
+  padding: 2px 4px;
+  height: 150px;
+  overflow-y: auto;
+}
+
+.field-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 6px;
+  margin: 1px 0;
+  border-radius: 4px;
+  cursor: grab;
+  font-size: 11px;
+  color: #303133;
+  transition: all 0.15s;
+}
+
+.field-item:hover {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.field-item:active {
+  cursor: grabbing;
+  background: #d9ecff;
+}
+
+.field-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+/* 四象限 2x2 网格 */
+.zones-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.zone-card {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  height: 100px;
+}
+
+.config-section .section-body {
+  padding: 6px 8px 8px;
+}
+
+.zone-card:hover {
+  border-color: #409eff;
+}
+
+.zone-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #606266;
+  background: #fafafa;
+  border-bottom: 1px solid #ebeef5;
+  border-radius: 6px 6px 0 0;
+}
+
+.zone-body {
+  padding: 4px 6px;
+  min-height: 28px;
+}
+
+.zone-body.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zone-placeholder {
+  color: #c0c4cc;
+  font-size: 11px;
+}
+
+.zone-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  margin: 2px 0;
+  background: #f0f9eb;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.zone-item-field {
+  font-weight: 500;
+  color: #303133;
+  min-width: 60px;
+  font-size: 12px;
+}
+
+.between-inputs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.zone-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.zone-actions .el-button {
+  flex: 1;
+}
+
+/* 排序 + Limit */
+.extra-row {
+  display: flex;
+  gap: 8px;
+  padding-top: 6px;
+  flex-wrap: wrap;
+}
+
+.extra-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.extra-item label {
+  font-size: 11px;
+  color: #606266;
+  white-space: nowrap;
+}
+
+/* HAVING */
+.having-section {
+  padding-top: 6px;
+  border-top: 1px solid #ebeef5;
+  margin-top: 6px;
+}
+
+.having-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.having-head label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.having-empty {
+  font-size: 11px;
+  color: #c0c4cc;
+  padding: 4px 0;
+  font-style: italic;
+}
+
+.having-items {
+  height: 60px;
+  overflow-y: auto;
+}
+
+.having-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+</style>
