@@ -34,18 +34,6 @@
         </div>
       </div>
 
-      <button
-        type="button"
-        class="sidebar-toggle"
-        :class="{ 'is-open': showConfigPanel }"
-        @click="showConfigPanel = !showConfigPanel"
-      >
-        <el-icon :size="16">
-          <ArrowRightBold v-if="showConfigPanel" />
-          <ArrowLeftBold v-else />
-        </el-icon>
-      </button>
-
       <aside class="board-sidebar" :class="{ 'is-open': showConfigPanel }">
         <div class="board-sidebar-inner">
           <ConfigPanel ref="configPanelRef" v-if="showConfigPanel" :api="pivotApi" />
@@ -119,7 +107,7 @@ import ChartBoard from '@/components/ChartBoard.vue'
 import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
 import VegaLiteRenderer from '@/components/VegaLiteRenderer.vue'
-import { ArrowLeftBold, ArrowRightBold, ChatDotRound } from '@element-plus/icons-vue'
+import { ChatDotRound } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const chartStore = useChartStore()
@@ -427,35 +415,6 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
-.sidebar-toggle {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(50%, -50%);
-  width: 30px;
-  height: 64px;
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
-  background: #ffffff;
-  color: #409eff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-  z-index: 20;
-  cursor: pointer;
-  transition: right 0.24s ease, background 0.2s ease, color 0.2s ease;
-}
-
-.sidebar-toggle:hover {
-  background: #409eff;
-  color: #ffffff;
-}
-
-.sidebar-toggle.is-open {
-  right: 368px;
-}
-
 .board-ai-button {
   position: fixed;
   bottom: 24px;
@@ -491,10 +450,6 @@ onBeforeUnmount(() => {
 
   .board-sidebar-inner {
     width: min(368px, calc(100vw - 48px));
-  }
-
-  .sidebar-toggle.is-open {
-    right: min(368px, calc(100vw - 48px));
   }
 
   .board-ai-button {

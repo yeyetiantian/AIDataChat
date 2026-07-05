@@ -11,14 +11,6 @@
           <el-icon :size="16"><Plus /></el-icon>
           <span>新增</span>
         </button>
-        <router-link to="/board" class="top-nav-item" active-class="nav-active" title="看板">
-          <el-icon :size="18"><Collection /></el-icon>
-          <span>看板</span>
-        </router-link>
-        <router-link to="/set" class="top-nav-item" active-class="nav-active" title="数据分析">
-          <el-icon :size="18"><Histogram /></el-icon>
-          <span>配置</span>
-        </router-link>
       </div>
     </header>
 
@@ -31,7 +23,7 @@
 </template>
 
 <script setup lang="ts">
-import { Histogram, Collection, Plus } from '@element-plus/icons-vue'
+import { Plus } from '@element-plus/icons-vue'
 
 function handleCreateBoard() {
   window.dispatchEvent(new CustomEvent('board:create'))
@@ -112,29 +104,6 @@ html, body, #app {
 .top-create-button:hover {
   background: #337ecc;
   color: #ffffff;
-}
-
-.top-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  border-radius: 6px;
-  text-decoration: none;
-  color: #909399;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.top-nav-item:hover {
-  background: #f0f2f5;
-  color: #409eff;
-}
-
-.nav-active {
-  background: #ecf5ff;
-  color: #409eff;
 }
 
 .app-body {
