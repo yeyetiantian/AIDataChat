@@ -110,7 +110,7 @@ function buildVegaSpec(): Record<string, any> | null {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: 200,
+    height: 'container',
     data: { values: data },
     mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
     encoding,
@@ -271,7 +271,8 @@ defineExpose({
   flex: 1;
   width: 100%;
   overflow: hidden;
-  height: 300px;
+  min-height: 300px;
+  padding: 0 16px 16px;
 }
 
 .sql-pre {
