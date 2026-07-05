@@ -156,31 +156,27 @@ def _get_base_system_prompt() -> str:
 用户只是打招呼、问简单问题，直接回复即可。
 suggestions 字段必须为空列表（无需生成追问）。
 
-### 2. 图表分析模式（统一使用 charts 数组）
-只有用户明确要你生成多个图表时你才生成多个图表，其他情况一律单个图表。
+### 2. 图表分析模式
+
+**默认：每个请求只生成一个图表。** 即使请求包含多个维度，也聚合到一个图表中。
+
+**多图表例外**：只有用户明确说"分别展示"、"生成多个图表"、"同时看多个维度"这类明确表示要多个图表时，才使用多个图表。
+
 所有图表配置统一使用 charts 数组，即使只生成一个图表也放在 charts 中。
 每个图表包含 title、pivot_config、chart_type。
 
-示例：
-{{{{"intent": "chart", "reply": "我生成了两个图表：", "charts": [
-  {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}},
-  {{{{ "title": "各规则类型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "rule_type", "alias": "规则类型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
-]}}}}
-
-只生成一张图时同样使用 charts：
+单图表示例（默认行为）：
 {{{{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
   {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
 ]}}}}
 
-**支持用户自定义筛选和二次追问修正：**
-- "只看SUV的" → 在 filters 中添加筛选条件
-- "改成折线图" → 修改 chart_type
-- "按天统计" → 在 axes 的 field 上添加 group (day)
-- "再加个图例按规则名称" → 在 legend 中添加字段
+多图表示例（仅当用户明确要求时才使用）：
+{{{{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
+  {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}},
+  {{{{ "title": "各规则类型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "rule_type", "alias": "规则类型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
+]}}}}
 
-**对话历史中的前一次 pivot_config 可作为基础进行迭代修改。**
-检查 conversation_history 中的上一次 assistant 回复，
-提取其中的 pivot_config 做增量修改，而不是每次都从头生成。
+**修改已有图表**：当用户要求修改（如"改成饼图""只看SUV""按天统计"），只修改当前对话中的**最后一个图表配置**，保持 charts 数量不变。
 
 ### 图表字段说明
 - axes: 横轴/行维度字段（GROUP BY）
@@ -212,6 +208,8 @@ class AgentState(TypedDict):
     error: Optional[str]
     analyze_retry_count: int              # 校验重试计数（最多 1 次）
     validation_error: Optional[str]       # 校验失败原因（重试时喂给 LLM）
+    execute_retry_count: int              # SQL 执行失败重试计数（最多 2 次）
+    sql_error: Optional[str]              # SQL 执行错误信息（重试时喂给 LLM）
     trace_log: list[dict[str, Any]]
 
 
@@ -251,7 +249,9 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
         "suggestions": state.get("suggestions"),
         "error": state.get("error"),
         "validation_error": state.get("validation_error"),
+        "sql_error": state.get("sql_error"),
         "analyze_retry_count": state.get("analyze_retry_count"),
+        "execute_retry_count": state.get("execute_retry_count"),
         "trace": state.get("trace_log", []),
     }
 
@@ -354,11 +354,18 @@ def analyze_node(state: AgentState) -> AgentState:
             {"role": "system", "content": _get_base_system_prompt()},
         ]
 
-        # 如果是重试，追加校验失败的反馈信息
+        # 如果是校验重试，追加校验失败的反馈信息
         if state.get("analyze_retry_count", 0) > 0 and state.get("validation_error"):
             messages.append({
                 "role": "system",
                 "content": f"注意：上一次生成的配置在校验中未通过，请根据以下反馈修正：\n{state['validation_error']}\n请重新生成符合要求的配置。",
+            })
+
+        # 如果是 SQL 执行失败重试，追加错误反馈
+        if state.get("execute_retry_count", 0) > 0 and state.get("sql_error"):
+            messages.append({
+                "role": "system",
+                "content": f"注意：上一次生成的配置在 SQL 查询时出错：\n{state['sql_error']}\n请检查字段名、值 ID 引用和列名是否正确，重新生成配置。",
             })
 
         for h in (state.get("conversation_history") or []):
@@ -525,11 +532,13 @@ def execute_node(state: AgentState) -> AgentState:
         return state
 
     charts = state.get("charts", []) or []
+    errors: list[str] = []
     for chart in charts:
         pc_dict = chart.get("pivot_config") or chart.get("config")
         ct = chart.get("chart_type", "bar")
         if not pc_dict:
             chart["error"] = "缺少 pivot_config"
+            errors.append("缺少 pivot_config")
             continue
 
         pc_dict["chart_type"] = ct
@@ -544,10 +553,34 @@ def execute_node(state: AgentState) -> AgentState:
             chart["error"] = str(e2)
             chart.setdefault("data", [])
             chart.setdefault("sql", "")
+            errors.append(str(e2))
+
+    # 判断是否需要重试：所有图表都失败，且未超重试上限
+    all_failed = len(errors) > 0 and len(errors) == len(charts)
+    retry_count = state.get("execute_retry_count", 0)
+
+    if all_failed and retry_count < 2:
+        state["execute_retry_count"] = retry_count + 1
+        state["sql_error"] = f"SQL 查询失败（第 {retry_count + 1} 次重试）：{errors[0]}"
+        trace.append({
+            "step": "execute_retry",
+            "retry_count": state["execute_retry_count"],
+            "errors": errors,
+        })
+    elif all_failed:
+        state["error"] = (state.get("error") or "") + f" SQL 执行多次失败：{errors[0]}"
+        state["sql_error"] = None
+        trace.append({
+            "step": "execute_fail",
+            "errors": errors,
+        })
+    else:
+        # 至少有一个成功
+        state["sql_error"] = None
+        trace.append({"step": "execute_success", "chart_count": len(charts)})
 
     trace.append({
-        "step": "execute_success",
-        "chart_count": len(charts),
+        "step": "execute_end",
         "timestamp": datetime.now().isoformat(),
         "output_snapshot": _snapshot(state),
     })
@@ -622,7 +655,21 @@ def build_agent() -> Any:
             "format_reply": "format_reply",
         },
     )
-    workflow.add_edge("execute", "format_reply")
+
+    # execute 条件路由：SQL 失败 → analyze 重试（最多 2 次）
+    def _route_after_execute(state: AgentState) -> str:
+        if state.get("sql_error") and state.get("execute_retry_count", 0) <= 2:
+            return "analyze"
+        return "format_reply"
+
+    workflow.add_conditional_edges(
+        "execute",
+        _route_after_execute,
+        {
+            "analyze": "analyze",
+            "format_reply": "format_reply",
+        },
+    )
     workflow.add_edge("format_reply", END)
 
     memory = MemorySaver()
@@ -676,6 +723,8 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
         "error": None,
         "analyze_retry_count": 0,
         "validation_error": None,
+        "execute_retry_count": 0,
+        "sql_error": None,
         "trace_log": [],
     }
 

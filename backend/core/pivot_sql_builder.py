@@ -684,26 +684,30 @@ class PivotSQLBuilder:
             sa = v.get("show_as")
             if not sa or sa.get("type", "normal") == "normal":
                 continue
-            alias = v.get("alias") or v.get("id")
+            # 获取实际列名：PIVOT 模式用 _pivot_value_col_map，GROUP BY 模式用 field
+            if self.legend:
+                col = self._pivot_value_col_map.get(v.get("id"), v.get("id"))
+            else:
+                col = v.get("field") or v.get("alias") or v.get("id")
             st = sa.get("type")
             if st == "column_percentage":
-                selects.append(f'"{alias}" / NULLIF(SUM("{alias}") OVER (), 0) AS "{alias}_百分比"')
+                selects.append(f'"{col}" / NULLIF(SUM("{col}") OVER (), 0) AS "{col}_百分比"')
             elif st == "row_percentage":
                 pf = sa.get("partition_field")
                 if pf:
-                    selects.append(f'"{alias}" / NULLIF(SUM("{alias}") OVER (PARTITION BY "{pf}"), 0) AS "{alias}_行百分比"')
+                    selects.append(f'"{col}" / NULLIF(SUM("{col}") OVER (PARTITION BY "{pf}"), 0) AS "{col}_行百分比"')
             elif st == "total_percentage":
-                selects.append(f'"{alias}" / NULLIF(SUM("{alias}") OVER (), 0) AS "{alias}_占比"')
+                selects.append(f'"{col}" / NULLIF(SUM("{col}") OVER (), 0) AS "{col}_占比"')
             elif st == "difference":
                 base = sa.get("base_field")
                 if base:
-                    selects.append(f'"{alias}" - "{base}" AS "{alias}_差值"')
+                    selects.append(f'"{col}" - "{base}" AS "{col}_差值"')
             elif st == "running_total":
                 rf = sa.get("running_field") or (self.axes[0]["field"] if self.axes else "TRIGGER_TIME")
-                selects.append(f'SUM("{alias}") OVER (ORDER BY "{rf}") AS "{alias}_累计"')
+                selects.append(f'SUM("{col}") OVER (ORDER BY "{rf}") AS "{col}_累计"')
             elif st in ("rank_asc", "rank_desc"):
                 od = "ASC" if st == "rank_asc" else "DESC"
-                selects.append(f'RANK() OVER (ORDER BY "{alias}" {od}) AS "{alias}_排名"')
+                selects.append(f'RANK() OVER (ORDER BY "{col}" {od}) AS "{col}_排名"')
         return f"SELECT {', '.join(selects)}\nFROM {src}"
 
     def _build_having(self, src: str) -> str:
@@ -788,10 +792,13 @@ class PivotSQLBuilder:
 
         # 使用值的别名作为排序列名
         by_column = by
-        for v in self.values:
-            if v.get("id") == by:
-                by_column = v["id"]
-                break
+        if by in self._pivot_value_col_map:
+            by_column = self._pivot_value_col_map[by]
+        else:
+            for v in self.values:
+                if v.get("id") == by:
+                    by_column = v.get("field") or v.get("alias") or v["id"]
+                    break
 
         return f"SELECT * FROM {src}\nQUALIFY ROW_NUMBER() OVER (ORDER BY \"{by_column}\" {direction}) <= {count}"
 

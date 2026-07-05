@@ -49,7 +49,12 @@
                 </div>
               </div>
               <div class="card-chart">
+                <div v-if="chart.error" class="chart-error">
+                  <el-icon :size="24" color="#e6a23c"><WarningFilled /></el-icon>
+                  <span>图表生成失败，请尝试重新描述分析需求</span>
+                </div>
                 <VegaLiteRenderer
+                  v-else
                   :data="chart.data"
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
@@ -109,7 +114,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch } from 'vue'
 import { ChatLineSquare, Promotion } from '@element-plus/icons-vue'
-import { Edit, FullScreen, Picture, View, PieChart } from '@element-plus/icons-vue'
+import { Edit, FullScreen, Picture, View, PieChart, WarningFilled } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChartStore, type SavedChart } from '@/stores/useChartStore'
@@ -418,5 +423,22 @@ watch(() => chatStore.messages.length, async () => {
 
 .send-btn {
   height: 36px;
+}
+
+.card-chart {
+  min-height: 0;
+}
+
+.chart-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: #909399;
+  font-size: 13px;
+  background: #fafafa;
+  border-radius: 8px;
 }
 </style>
