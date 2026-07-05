@@ -434,10 +434,6 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     config = {"configurable": {"thread_id": thread_id}}
     result = await agent.ainvoke(state, config)
 
-    # 调试：查看 result 中的 suggestions
-    logger.info("Agent result keys: %s", list(result.keys()))
-    logger.info("Agent suggestions from result: %s", repr(result.get("suggestions", "NOT_FOUND")))
-
     reply_text = result.get("reply", "")
     pivot_cfg = result.get("pivot_config") if result.get("intent") == "chart" else None
     suggestions_list = result.get("suggestions", [])
@@ -449,7 +445,6 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
             if t_.get("step") == "analyze_end":
                 snap = t_.get("output_snapshot", {})
                 suggestions_list = snap.get("suggestions", [])
-                logger.info("Fell back to trace analyze_end suggestions: %s", suggestions_list)
                 break
 
     elapsed = (time.time() - start) * 1000

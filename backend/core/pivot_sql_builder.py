@@ -315,17 +315,18 @@ class PivotSQLBuilder:
         # =============== 宽表模式 (明细宽表) 判定 ===============
         from core.field_registry import (
             WIDE_DETAIL_FIXED_KEYS,
-            get_field_names,
         )
-        self._source_field_names = set(get_field_names())
+        # 已知非信号列 = 宽表固定 12 字段
         self._fixed_wide_keys = set(WIDE_DETAIL_FIXED_KEYS)
         self._all_fields: set[str] = self._collect_fields()
-        # 宽表固定列或非源表字段 => 属于明细宽表列
-        wide_hits = {f for f in self._all_fields
-                     if f in self._fixed_wide_keys or f not in self._source_field_names}
-        self.use_wide_detail: bool = len(wide_hits) > 0
-        # 宽表中需要 PIVOT 的信号名集合：不在 8 个固定列里，也不是源表原生列
-        self.wide_signal_names: set[str] = {f for f in wide_hits if f not in self._fixed_wide_keys}
+        # 明细宽表模式判定：所有引用列中，只要有一个是固定宽表列，就用宽表模式
+        self.use_wide_detail: bool = bool(self._all_fields & self._fixed_wide_keys)
+        # 宽表中需要查询的信号名集合：不在 12 个固定列里的，都视为信号列
+        #（宽表已预构建全部信号列，按名直接查询即可）
+        self.wide_signal_names: set[str] = {
+            f for f in self._all_fields
+            if f not in self._fixed_wide_keys
+        }
         if self.use_wide_detail:
             logger.info(
                 "命中明细宽表模式：固定列 %s 个, 信号列 %s 个 (%s)",
