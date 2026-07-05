@@ -41,18 +41,72 @@
               <div v-if="filters.length === 0" class="zone-placeholder">拖入字段</div>
               <div v-for="(item, i) in filters" :key="i" class="zone-item">
                 <span class="zone-item-field">{{ item.field }}</span>
-                <el-select v-model="item.op" size="small" style="width:70px">
-                  <el-option label="=" value="=" /><el-option label="!=" value="!=" />
-                  <el-option label=">" value=">" /><el-option label=">=" value=">=" />
-                  <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
-                  <el-option label="between" value="between" /><el-option label="in" value="in" />
-                </el-select>
-                <el-input v-if="item.op !== 'between'" v-model="item.value" size="small" style="width:70px" placeholder="值" />
-                <div v-else class="between-inputs">
-                  <el-input v-model="item.value[0]" size="small" style="width:50px" /><span>~</span>
-                  <el-input v-model="item.value[1]" size="small" style="width:50px" />
-                </div>
+                <template v-if="isTimeFilterField(item.field)">
+                  <el-select v-model="item.op" size="small" style="width:70px" @change="handleTimeFilterOpChange(item)">
+                    <el-option label="=" value="=" /><el-option label="!=" value="!=" />
+                    <el-option label=">" value=">" /><el-option label=">=" value=">=" />
+                    <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
+                    <el-option label="between" value="between" />
+                  </el-select>
+                  <el-date-picker
+                    v-if="item.op !== 'between'"
+                    v-model="item.value"
+                    type="datetime"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    size="small"
+                    class="filter-date-picker"
+                    placeholder="选择日期时间"
+                  />
+                  <div v-else class="between-inputs">
+                    <el-date-picker
+                      v-model="item.value[0]"
+                      type="datetime"
+                      value-format="YYYY-MM-DD HH:mm:ss"
+                      size="small"
+                      class="filter-date-picker-sm"
+                      placeholder="开始"
+                    />
+                    <span>~</span>
+                    <el-date-picker
+                      v-model="item.value[1]"
+                      type="datetime"
+                      value-format="YYYY-MM-DD HH:mm:ss"
+                      size="small"
+                      class="filter-date-picker-sm"
+                      placeholder="结束"
+                    />
+                  </div>
+                </template>
+                <template v-else>
+                  <el-select
+                    :model-value="item.value"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    size="small"
+                    class="filter-value-select"
+                    placeholder="选择值"
+                    @update:model-value="(val) => onFilterMultiChange(item, val)"
+                  >
+                    <el-option
+                      v-for="opt in getFilterOptions(item.field)"
+                      :key="opt.value === '' ? '__all__' : opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                </template>
                 <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'filters')" />
+                <el-button
+                  v-if="isResultViewField(item.field)"
+                  size="small"
+                  type="primary"
+                  :icon="Document"
+                  style="margin-left: 1px;"
+                  circle
+                  title="查看结果列表"
+                  @click="resultDialogVisible = true"
+                />
               </div>
             </div>
           </div>
@@ -167,12 +221,25 @@
       </div>
     </div>
   </div>
+
+  <ResultListDialog v-model="resultDialogVisible" />
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, toRef, onMounted } from 'vue'
-import { Filter, DataAnalysis, PieChart, Histogram, Delete } from '@element-plus/icons-vue'
+import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document } from '@element-plus/icons-vue'
 import type { FieldDef, ZoneType, FilterItem, AxisItem, LegendItem, ValueItem } from '@/types'
+import { TIME_FILTER_FIELDS, STATIC_DROPDOWN_DATA } from '@/constants/filterDropdown'
+import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
+import ResultListDialog from '@/components/ResultListDialog.vue'
+
+interface DropdownOption {
+  label: string
+  value: string
+}
+
+const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
+const resultDialogVisible = ref(false)
 
 export interface TableGroup {
   table_name: string
@@ -244,6 +311,117 @@ const filteredGroups = computed(() => {
 
 // ========== 方法 ==========
 
+function isTimeFilterField(field: string): boolean {
+  return (TIME_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isResultViewField(field: string): boolean {
+  return (RESULT_VIEW_FIELDS as readonly string[]).includes(field)
+}
+
+function getFilterOptions(field: string): DropdownOption[] {
+  return dropdownCache[field] ?? [{ label: '全部', value: '' }]
+}
+
+async function loadFilterDropdown(field: string): Promise<DropdownOption[]> {
+  if (dropdownCache[field]) return dropdownCache[field]
+
+  // TODO: 接口就绪后取消注释，改用接口数据
+  // try {
+  //   const resp = await fetch(`/api/getDropdown?type=${encodeURIComponent(field)}`)
+  //   if (resp.ok) {
+  //     const data: { label: string; value?: string }[] = await resp.json()
+  //     dropdownCache[field] = [
+  //       { label: '全部', value: '' },
+  //       ...data.map((item, i) => ({ label: item.label, value: item.value ?? String(i) })),
+  //     ]
+  //     return dropdownCache[field]
+  //   }
+  // } catch (e) {
+  //   console.error('[ConfigPanel] 获取下拉数据失败', field, e)
+  // }
+
+  const labels = STATIC_DROPDOWN_DATA[field] ?? []
+  dropdownCache[field] = [
+    { label: '全部', value: '' },
+    ...labels.map((label, i) => ({ label, value: String(i) })),
+  ]
+  return dropdownCache[field]
+}
+
+function onFilterMultiChange(item: FilterItem, val: string[]) {
+  const prev: string[] = Array.isArray(item.value) ? [...item.value] : ['']
+
+  if (val.length === 0) {
+    item.value = ['']
+    return
+  }
+
+  const added = val.filter(v => !prev.includes(v))
+
+  if (added.includes('')) {
+    item.value = ['']
+  } else if (added.length > 0 && prev.includes('')) {
+    item.value = val.filter(v => v !== '')
+  } else {
+    item.value = val
+  }
+}
+
+function normalizeFilterForUI(item: FilterItem): FilterItem {
+  if (isTimeFilterField(item.field)) {
+    if (item.op === 'between') {
+      const v = item.value
+      if (Array.isArray(v)) return { ...item, value: [v[0] ?? '', v[1] ?? ''] }
+      if (typeof v === 'string' && v.includes(',')) {
+        const [a, b] = v.split(',')
+        return { ...item, value: [a ?? '', b ?? ''] }
+      }
+      return { ...item, value: ['', ''] }
+    }
+    return { ...item, value: typeof item.value === 'string' ? item.value : '' }
+  }
+  const op = item.op === '=' ? 'in' : (item.op || 'in')
+  let values: string[]
+  if (Array.isArray(item.value)) {
+    values = item.value.map(String)
+  } else if (typeof item.value === 'string' && item.value !== '') {
+    values = item.value.split(',').map(s => s.trim())
+  } else {
+    values = ['']
+  }
+  if (values.length === 0) values = ['']
+  return { ...item, op, value: values }
+}
+
+function serializeFilterForApi(item: FilterItem): FilterItem {
+  if (isTimeFilterField(item.field)) {
+    if (item.op === 'between' && Array.isArray(item.value)) {
+      return { field: item.field, op: item.op, value: item.value.join(',') }
+    }
+    return { field: item.field, op: item.op, value: item.value }
+  }
+  const arr = Array.isArray(item.value) ? item.value : [item.value]
+  if (arr.length === 0 || (arr.length === 1 && arr[0] === '')) {
+    return { field: item.field, op: 'in', value: '' }
+  }
+  return { field: item.field, op: 'in', value: arr.filter(v => v !== '').join(',') }
+}
+
+function onTimeFilterOpChange(item: FilterItem, op: string | number) {
+  const opStr = String(op)
+  if (opStr === 'between') {
+    const v = item.value
+    item.value = Array.isArray(v) ? [v[0] ?? '', v[1] ?? ''] : [v || '', '']
+  } else if (Array.isArray(item.value)) {
+    item.value = item.value[0] ?? ''
+  }
+}
+
+function handleTimeFilterOpChange(item: FilterItem) {
+  return (op: string | number) => onTimeFilterOpChange(item, op)
+}
+
 function addHaving() {
   stateData.having.push({ field: '', op: '>=', value: '' })
 }
@@ -271,7 +449,12 @@ function onDrop(event: DragEvent, zone: ZoneType) {
   const field: FieldDef = JSON.parse(raw)
   const item = { field: field.name, alias: field.alias_cn }
   if (zone === 'filters') {
-    stateData.filters.push({ field: field.name, op: '=', value: '' })
+    const isTime = isTimeFilterField(field.name)
+    const newFilter: FilterItem = isTime
+      ? { field: field.name, op: '=', value: '' }
+      : { field: field.name, op: 'in', value: [''] }
+    stateData.filters.push(newFilter)
+    if (!isTime) loadFilterDropdown(field.name)
   } else if (zone === 'axes') {
     stateData.axes.push({ field: field.name, alias: field.alias_cn, sort: 'asc' })
   } else if (zone === 'legend') {
@@ -301,7 +484,7 @@ async function handleQuery() {
   stateData.loading = true
   try {
     const config = {
-      filters: stateData.filters,
+      filters: stateData.filters.map(serializeFilterForApi),
       axes: stateData.axes.map(a => ({ field: a.field, alias: a.alias })),
       legend: stateData.legend.map(l => ({ field: l.field, alias: l.alias })),
       values: stateData.values.map(v => ({
@@ -335,7 +518,12 @@ function handleClear() {
 // ========== 暴露给父组件的方法 ==========
 defineExpose({
   setDefaultValues: (config: { filters?: FilterItem[]; axes?: AxisItem[]; legend?: LegendItem[]; values?: ValueItem[] }) => {
-    if (config.filters) stateData.filters = config.filters
+    if (config.filters) {
+      stateData.filters = config.filters.map(normalizeFilterForUI)
+      config.filters.forEach(f => {
+        if (!isTimeFilterField(f.field)) loadFilterDropdown(f.field)
+      })
+    }
     if (config.axes) stateData.axes = config.axes
     if (config.legend) stateData.legend = config.legend
     if (config.values) stateData.values = config.values
@@ -562,6 +750,23 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-value-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-date-picker {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-date-picker-sm {
+  flex: 1;
+  min-width: 0;
 }
 
 .zone-actions {
