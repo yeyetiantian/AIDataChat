@@ -57,6 +57,7 @@ const props = defineProps<{
   sql?: string | null
   executionTimeMs?: number
   hideToolbar?: boolean
+  height?: number | string
 }>()
 
 const chartContainer = ref<HTMLElement | null>(null)
@@ -110,7 +111,7 @@ function buildVegaSpec(): Record<string, any> | null {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: 'container',
+    height: props.height || 'container',
     data: { values: data },
     mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
     encoding,
@@ -271,8 +272,7 @@ defineExpose({
   flex: 1;
   width: 100%;
   overflow: hidden;
-  min-height: 300px;
-  padding: 0 16px 16px;
+  height: 300px;
 }
 
 .sql-pre {

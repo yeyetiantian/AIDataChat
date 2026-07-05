@@ -57,7 +57,7 @@
     <el-dialog
       v-model="showAiDialog"
       title="AI 对话分析"
-      width="600px"
+      width="700px"
       top="5vh"
       destroy-on-close
     >

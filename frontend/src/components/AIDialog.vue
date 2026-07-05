@@ -54,11 +54,15 @@
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
                   :hide-toolbar="true"
+                  :height="260"
                   style="min-height: auto;"
                 />
               </div>
             </div>
           </div>
+          <el-tag type="primary" v-for="sg in msg.suggestions" :key="sg" class="suggestion-tag" @click="onSuggest(sg)">
+            {{ sg }}
+          </el-tag>
         </div>
       </div>
 
@@ -317,6 +321,9 @@ watch(() => chatStore.messages.length, async () => {
 
 .chart-card {
   width: 500px;
+  background: white;
+  border-radius: 8px;
+  margin: 10px 0;
 }
 
 .card-header {
@@ -324,6 +331,7 @@ watch(() => chatStore.messages.length, async () => {
   justify-content: space-between;
   align-items: flex-end;
   gap: 12px;
+  padding: 8px 12px;
 }
 
 .card-actions {
