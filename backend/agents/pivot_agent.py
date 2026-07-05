@@ -40,7 +40,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 class ChartItem(BaseModel):
     """单个图表配置"""
     title: str = Field("", description="图表标题说明")
-    pivot_config: PivotConfig = Field(..., description="透视表配置")
+    pivot_config: PivotConfig = Field(..., description="报表配置")
     chart_type: Literal["bar", "line", "area", "point", "pie", "radar"] = Field(
         "bar", description="图表类型"
     )

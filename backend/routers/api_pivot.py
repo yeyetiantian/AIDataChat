@@ -55,7 +55,7 @@ def _set_cached(hash_key: str, result: dict) -> None:
 
 @router.post("/pivot", response_model=PivotResponse)
 async def pivot_query(config: PivotConfig):
-    """执行透视表查询"""
+    """执行表查询"""
     hash_key = _config_hash(config)
 
     # 检查缓存
@@ -69,5 +69,5 @@ async def pivot_query(config: PivotConfig):
         _set_cached(hash_key, result)
         return PivotResponse(**result)
     except Exception as e:
-        logger.error("透视表查询失败: %s", e, exc_info=True)
+        logger.error("报表查询失败: %s", e, exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))

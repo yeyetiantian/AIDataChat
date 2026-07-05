@@ -107,7 +107,7 @@ class Pagination(BaseModel):
 
 
 class PivotConfig(BaseModel):
-    """完整透视表配置（严格四属性）"""
+    """完整表配置（严格四属性）"""
     filters: list[FilterItem] = Field(default_factory=list, description="筛选器 → WHERE")
     axes: list[AxisItem] = Field(default_factory=list, description="轴 → GROUP BY")
     legend: list[LegendItem] = Field(default_factory=list, description="图例 → PIVOT ON")
@@ -128,7 +128,7 @@ class PivotConfig(BaseModel):
 
 
 class PivotResponse(BaseModel):
-    """透视表 API 响应"""
+    """表 API 响应"""
     data: list[dict[str, Any]] = Field(..., description="聚合结果数据")
     columns: list[str] = Field(..., description="列名列表")
     total: int = Field(0, description="总条数（分页用）")

@@ -6,7 +6,7 @@
           <div class="preview-header">
             <div class="preview-copy">
               <strong>当前预览</strong>
-              <span>通过右侧透视表配置生成，可直接保存到看板</span>
+              <span>通过右侧报表配置生成，可直接保存到看板</span>
             </div>
             <div class="preview-actions">
               <el-button size="small" @click="clearPreview">清空预览</el-button>

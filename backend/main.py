@@ -62,11 +62,13 @@ from routers.api_pivot import router as pivot_router
 from routers.api_chat import router as chat_router
 from routers.api_admin import router as admin_router
 from routers.api_charts import router as charts_router
+from routers.api_recommend import router as recommend_router
 
 app.include_router(pivot_router)
 app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(charts_router)
+app.include_router(recommend_router)
 
 
 @app.get("/")
@@ -76,9 +78,10 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "api": {
-            "pivot": "POST /api/pivot — 透视表查询",
+            "pivot": "POST /api/pivot — 报表查询",
             "chat": "POST /api/chat — AI 对话分析",
             "charts": "GET/POST /api/charts — 看板管理",
+            "recommend": "POST /api/recommend-chart — 图表类型推荐",
             "admin": {
                 "refresh": "POST /api/admin/refresh_wide_detail — 重建 WIDE_DETAIL 明细宽表",
                 "health": "GET /api/admin/health — 健康检查",

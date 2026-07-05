@@ -1,4 +1,4 @@
-"""透视表 SQL 生成器
+"""表 SQL 生成器
 
 基于 PivotConfig 生成 DuckDB SQL 的 9 步流水线。
 数据来源支持两种模式：
@@ -291,7 +291,7 @@ def _value_expr(d: dict[str, Any], for_pivot: bool = False, is_wide_signal: bool
 
 
 class PivotSQLBuilder:
-    """透视表 SQL 生成器"""
+    """表 SQL 生成器"""
 
     def __init__(self, config: PivotConfig):
         cfg = _to_dict(config)
@@ -807,7 +807,7 @@ class PivotSQLBuilder:
 
 
 def execute_pivot(config: PivotConfig) -> dict[str, Any]:
-    """执行透视表查询"""
+    """执行表查询"""
     start = time.time()
     builder = PivotSQLBuilder(config)
     sql, _ = builder.build()
