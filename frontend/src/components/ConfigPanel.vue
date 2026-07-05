@@ -292,7 +292,7 @@
 
         <!-- 操作按钮（在最下边） -->
         <div class="zone-actions">
-          <el-button size="small" type="primary" :loading="loading" @click="handleQuery">查询</el-button>
+          <el-button size="small" type="primary" :loading="loading" @click="handleQuery">加载报表数据</el-button>
           <el-button size="small" @click="handleClear">清空</el-button>
         </div>
       </div>

@@ -1,5 +1,5 @@
 <template>
-  <div class="vega-renderer" ref="chartContainer">
+  <div class="vega-renderer" :class="{ 'is-fullscreen': isFullscreen }" ref="chartContainer">
     <div v-if="!canRender" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>拖拽字段并点击查询生成图表</p>
@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
 
@@ -65,6 +65,9 @@ const vegaContainer = ref<HTMLElement | null>(null)
 const showDataDialog = ref(false)
 const showSqlDialog = ref(false)
 const embedResult = ref<any>(null)
+const isFullscreen = ref(false)
+let renderTimer: ReturnType<typeof setTimeout> | null = null
+let resizeObserver: ResizeObserver | null = null
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -309,6 +312,27 @@ function toggleFullscreen() {
   }
 }
 
+function handleFullscreenChange() {
+  isFullscreen.value = document.fullscreenElement === chartContainer.value
+  scheduleRender(80)
+}
+
+function handleWindowResize() {
+  scheduleRender(30)
+}
+
+function scheduleRender(delay = 0) {
+  if (renderTimer) {
+    clearTimeout(renderTimer)
+  }
+
+  renderTimer = setTimeout(async () => {
+    renderTimer = null
+    await nextTick()
+    await renderChart()
+  }, delay)
+}
+
 function openDataDialog() {
   showDataDialog.value = true
 }
@@ -380,11 +404,33 @@ async function exportSvg(fileName = 'chart.svg') {
 watch(
   () => props.data ? JSON.stringify(props.data) + '|' + JSON.stringify(props.config) + '|' + (props.chartType || '') : null,
   async () => {
-    await nextTick()
-    await renderChart()
+    scheduleRender()
   },
   { immediate: true }
 )
+
+onMounted(() => {
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
+  window.addEventListener('resize', handleWindowResize)
+
+  if (typeof ResizeObserver !== 'undefined' && chartContainer.value) {
+    resizeObserver = new ResizeObserver(() => {
+      scheduleRender(30)
+    })
+    resizeObserver.observe(chartContainer.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  window.removeEventListener('resize', handleWindowResize)
+  resizeObserver?.disconnect()
+
+  if (renderTimer) {
+    clearTimeout(renderTimer)
+    renderTimer = null
+  }
+})
 
 defineExpose({
   openDataDialog,
@@ -450,6 +496,29 @@ defineExpose({
   width: 100%;
   overflow: hidden;
   height: 300px;
+}
+
+.vega-renderer.is-fullscreen,
+.vega-renderer:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  border-radius: 0;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 20px 24px 24px;
+}
+
+.vega-renderer.is-fullscreen .vega-container,
+.vega-renderer:fullscreen .vega-container {
+  height: 100%;
+  min-height: 0;
+}
+
+.vega-renderer.is-fullscreen .chart-toolbar,
+.vega-renderer:fullscreen .chart-toolbar {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .sql-pre {
