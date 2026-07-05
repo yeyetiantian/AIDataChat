@@ -276,7 +276,7 @@ onMounted(async () => {
 
 .card-chart {
   padding: 12px;
-  min-height: 240px;
+  height: 240px;
 }
 
 .card-footer {

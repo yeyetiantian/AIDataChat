@@ -1,12 +1,7 @@
 <template>
   <div class="ai-dialog">
-    <div class="dialog-header">
-      <h3>AI 对话分析</h3>
-      <el-button size="small" text @click="chatStore.clearMessages()">清空对话</el-button>
-    </div>
-
     <div class="dialog-messages" ref="messagesRef">
-      <div v-if="messages.length === 0" class="empty-state">
+      <div v-if="chatStore.messages.length === 0" class="empty-state">
         <el-icon :size="48" color="#c0c4cc"><ChatLineSquare /></el-icon>
         <p>输入分析需求，AI 将自动生成图表</p>
         <div class="suggestions">
@@ -21,17 +16,45 @@
         </div>
       </div>
 
-      <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
+      <div v-for="(msg, i) in chatStore.messages" :key="i" class="message" :class="msg.role">
         <div class="message-content">
           <div class="message-text">{{ msg.content }}</div>
 
           <!-- 图表显示 -->
           <div v-if="msg.charts && msg.charts.length" class="message-charts">
-            <div v-for="(chart, ci) in msg.charts" :key="ci" class="message-chart">
-              <div class="chart-title" v-if="chart.title">{{ chart.title }}</div>
-              <VegaLiteRenderer :data="chart.data" :config="chart.pivot_config" :chart-type="chart.chart_type || 'bar'" :sql="chart.sql || null" />
-              <div class="chart-actions">
-                <el-button size="small" type="primary" @click="saveChartToBoard(chart, ci)">保存到看板</el-button>
+            <div v-for="(chart, ci) in msg.charts" :key="chart.id" class="chart-card">
+              <div class="card-header">
+                <span class="card-title">{{ chart.title }}</span>
+                <div class="card-actions">
+                  <el-tooltip content="保存图片" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(chart.id, chart.title)">
+                      <el-icon :size="16"><Picture /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="查看数据" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openChartData(chart.id)">
+                      <el-icon :size="16"><View /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="全屏" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(chart.id)">
+                      <el-icon :size="16"><FullScreen /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="保存到看板" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="saveChartToBoard(chart, ci)">
+                      <el-icon :size="16"><PieChart /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+              </div>
+              <div class="card-chart">
+                <VegaLiteRenderer
+                  :data="chart.data"
+                  :config="chart.pivot_config"
+                  :chart-type="chart.chart_type"
+                  :hide-toolbar="true"
+                />
               </div>
             </div>
           </div>
@@ -79,8 +102,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import { ChatLineSquare, Promotion } from '@element-plus/icons-vue'
+import { Edit, FullScreen, Picture, View, PieChart } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChartStore, type SavedChart } from '@/stores/useChartStore'
@@ -89,12 +113,16 @@ import type { PivotConfig } from '@/types'
 const chatStore = useChatStore()
 const chartStore = useChartStore()
 
-// 模板中可以直接使用 messages（Pinia 的 setup store 属性在模板中自动解包有类型问题，用 computed 桥接）
-const messages = computed(() => chatStore.messages)
-
 const emit = defineEmits<{
   save: [chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>]
 }>()
+
+type ChartRendererHandle = {
+  openDataDialog: () => void
+  toggleFullscreen: () => void
+  exportPng: (fileName?: string) => Promise<void>
+  exportSvg: (fileName?: string) => Promise<void>
+}
 
 const input = ref('')
 const messagesRef = ref<HTMLElement | null>(null)
@@ -103,6 +131,7 @@ const saveTitle = ref('')
 const saveDesc = ref('')
 const saving = ref(false)
 const savingMessage = ref<any>(null)
+  const rendererRefs = ref<Record<number, ChartRendererHandle | null>>({})
 
 const suggestions = [
   '各车型触发次数分布',
@@ -117,9 +146,40 @@ function handleSend() {
   chatStore.sendMessage(msg)
 }
 
-function saveToBoard(msg: ChatMessage) {
-  savingMessage.value = msg
-  saveTitle.value = (msg.content || '').substring(0, 30) + '...'
+function setRendererRef(id: number, instance: any) {
+  if (
+    instance &&
+    typeof instance.openDataDialog === 'function' &&
+    typeof instance.toggleFullscreen === 'function' &&
+    typeof instance.exportPng === 'function' &&
+    typeof instance.exportSvg === 'function'
+  ) {
+    rendererRefs.value[id] = instance as ChartRendererHandle
+    return
+  }
+  rendererRefs.value[id] = null
+}
+
+function openChartData(id: number) {
+  rendererRefs.value[id]?.openDataDialog()
+}
+
+function exportChartPng(id: number, title: string) {
+  void rendererRefs.value[id]?.exportPng(`${title || 'chart'}.png`)
+}
+
+function toggleChartFullscreen(id: number) {
+  rendererRefs.value[id]?.toggleFullscreen()
+}
+
+function onSuggest(text: string) {
+  if (chatStore.loading) return
+  chatStore.sendMessage(text)
+}
+
+function saveChartToBoard(chart: any, index: number) {
+  savingMessage.value = chart
+  saveTitle.value = chart.title || `图表 ${index + 1}`
   saveDesc.value = ''
   showSaveDialog.value = true
 }
@@ -143,8 +203,6 @@ async function confirmSave() {
   }
 }
 
-
-
 // 滚动到底部
 watch(() => chatStore.messages.length, async () => {
   await nextTick()
@@ -158,7 +216,7 @@ watch(() => chatStore.messages.length, async () => {
 .ai-dialog {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 80vh;
   background: white;
   border-radius: 8px;
   overflow: hidden;
@@ -255,6 +313,54 @@ watch(() => chatStore.messages.length, async () => {
   color: #303133;
   padding: 8px 12px 0;
 }
+
+.chart-card {
+  width: 500px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.card-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.card-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.action-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+}
+
+.action-btn-primary {
+  color: #409eff;
+}
+
+.action-btn-primary:hover {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.action-btn-danger {
+  color: #f56c6c;
+}
+
+.action-btn-danger:hover {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
 
 .message-chart {
   margin-top: 12px;

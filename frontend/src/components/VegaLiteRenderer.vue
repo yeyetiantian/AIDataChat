@@ -271,8 +271,7 @@ defineExpose({
   flex: 1;
   width: 100%;
   overflow: hidden;
-  min-height: 300px;
-  padding: 0 16px 16px;
+  height: 300px;
 }
 
 .sql-pre {

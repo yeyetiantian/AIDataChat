@@ -7,8 +7,11 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   data?: Record<string, any>[] | null
+  charts?: Record<string, any>[] | null
   chart_type?: string
   pivot_config?: Record<string, any> | null
+  suggestions?: string[]
+  sql?: string | null
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -34,10 +37,13 @@ export const useChatStore = defineStore('chat', () => {
       const resp_data = await resp.json()
       messages.value.push({
         role: 'assistant',
-        content: data.reply || '已生成分析配置',
-        data: data.data || null,
-        chart_type: data.chart_type || 'bar',
-        pivot_config: data.pivot_config || null,
+        content: resp_data.reply || '已生成分析配置',
+        data: resp_data.data || null,
+        charts: resp_data.charts || null,
+        chart_type: resp_data.chart_type || 'bar',
+        pivot_config: resp_data.pivot_config || null,
+        suggestions: resp_data.suggestions || [],
+        sql: resp_data.sql || null,
       })
     } catch (e: any) {
       messages.value.push({

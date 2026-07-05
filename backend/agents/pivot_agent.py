@@ -422,7 +422,10 @@ def execute_node(state: AgentState) -> AgentState:
     except Exception as e:
         logger.error("Agent 查询执行失败: %s", e, exc_info=True)
         state["error"] = (state.get("error") or "") + f" 查询执行失败: {e}"
-        trace.append({"step": "execute_error", "error": str(e)})
+        if state.get("data") is None:
+            state["data"] = []
+        if state.get("sql") is None:
+            state["sql"] = ""
 
     trace.append({
         "step": "execute_end",
