@@ -2,8 +2,9 @@ name: Build AIDataChat
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       version:
@@ -21,42 +22,40 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux
-            python: '3.11'
-            node: '20'
+            python-version: '3.11'
+            node-version: '20'
 
           - os: macos-latest
             target: macos
-            python: '3.11'
-            node: '20'
+            python-version: '3.11'
+            node-version: '20'
 
           - os: windows-latest
             target: windows
-            python: '3.11'
-            node: '20'
+            python-version: '3.11'
+            node-version: '20'
 
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 设置 Python ${{ matrix.python }}
+      - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: backend/requirements.txt
 
-      - name: 设置 Node.js ${{ matrix.node }}
+      - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装 Python 依赖
         run: |
-          python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install pyinstaller
 
@@ -64,6 +63,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.event.inputs.version || '1.0.0' }}
         run: python backend/build_package.py
+        shell: ${{ matrix.target == 'windows' && 'bash' || 'bash' }}
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -73,17 +73,15 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  create_release:
+  release:
     needs: [build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
-      - name: 下载所有构建产物
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
 
-      - name: 创建 Release 并上传附件
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: AIDataChat-*/*.tar.gz
           generate_release_notes: true
