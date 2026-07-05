@@ -55,7 +55,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装 Python 依赖
-        run: pip install --only-binary :all: -r backend/requirements-lock.txt
+        run: pip install "--only-binary=:all:" -r backend/requirements-lock.txt
 
       - name: 执行打包
         env:
