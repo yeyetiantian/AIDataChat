@@ -5,6 +5,8 @@
 保留完整链路日志（每个节点的原始输入/输出 + SQL）。
 
 支持一次生成多种图表：如"各车型和各规则的报警次数"→2个图表。
+
+数据流：analyze（LLM 解析）→ validate（校验/重试）→ execute（查数据）→ format_reply（日志+回复）
 """
 
 from __future__ import annotations
@@ -45,15 +47,15 @@ class ChartItem(BaseModel):
 
 
 class AgentOutput(BaseModel):
-    """LLM 结构化输出：聊天或图表（支持多图表）"""
+    """LLM 结构化输出：聊天或图表（统一走 charts 列表）"""
     intent: Literal["chat", "chart"] = Field(description="chat=普通聊天, chart=图表分析")
     reply: str = Field(description="回复内容")
-    # 单图表（兼容）
+    # 单图表兼容字段（LLM 可能输出单图，analyze 节点统一转成 charts）
     pivot_config: Optional[PivotConfig] = Field(None, description="图表配置（单图表时使用）")
     chart_type: Optional[Literal["bar", "line", "area", "point", "pie", "radar"]] = Field(
         None, description="图表类型（单图表时使用）"
     )
-    # 多图表：用户要求"同时看多个维度"时使用
+    # 多图表字段
     charts: list[ChartItem] = Field(default_factory=list, description="多图表（一次生成多个图表时使用）")
     suggestions: list[str] = Field(default_factory=list, description="建议用户追问的 3 个问题")
 
@@ -112,7 +114,7 @@ def _get_base_system_prompt() -> str:
         return _base_system_prompt
 
     schema = _get_schema_text()
-    _base_system_prompt = f"""你是数据分析助手，支持三种模式：普通聊天、单图表分析、多图表分析。
+    _base_system_prompt = f"""你是数据分析助手，支持普通聊天和图表分析。
 
 ## 数据库
 你的数据来源是明细宽表 **WIDE_DETAIL**，包含以下字段：
@@ -125,18 +127,19 @@ def _get_base_system_prompt() -> str:
 用户只是打招呼、问简单问题，直接回复即可。
 suggestions 字段必须为空列表（无需生成追问）。
 
-### 2. 单图表模式
-用户想要查看一个维度的统计，生成一个图表。
-使用 pivot_config + chart_type 字段。
+### 2. 图表分析模式（统一使用 charts 数组）
+所有图表配置统一使用 charts 数组，即使只生成一个图表也放在 charts 中。
+每个图表包含 title、pivot_config、chart_type。
 
-### 3. 多图表模式（一次生成多个图表）
-当用户同时要求查看多个维度的数据时（如"各车型和各规则的报警次数"），
-使用 charts 数组，每个元素是一个完整的图表配置。
-
-多图表示例：
+示例：
 {{{{"intent": "chart", "reply": "我生成了两个图表：", "charts": [
   {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}},
   {{{{ "title": "各规则类型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "rule_type", "alias": "规则类型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
+]}}}}
+
+只生成一张图时同样使用 charts：
+{{{{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
+  {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
 ]}}}}
 
 **支持用户自定义筛选和二次追问修正：**
@@ -157,6 +160,9 @@ suggestions 字段必须为空列表（无需生成追问）。
 - chart_type: bar/line/area/point/pie/radar（时间序列→line，类别对比→bar，占比→pie）
 - group: 时间粒度 year/quarter/month/week/day/hour（仅时间字段）
 
+### 每个 pivot_config 中的 values 必须有 id 字段（如 "val_1", "val_2"...）
+缺少 id 会导致校验不通过，需要重新生成。
+
 ### SQL 要求
 - 固定字段（person/vehicle_type/vehicle/task/rule_name/rule_type/alarm_time/duration_sec）可直接引用
 - 对信号列（如 IBSBatSOC、PrplsnSysAtv）做数值聚合时，使用 TRY_CAST("信号名" AS DOUBLE)"""
@@ -169,15 +175,13 @@ class AgentState(TypedDict):
     user_message: str
     conversation_history: list[dict[str, str]]
     intent: Optional[str]
-    pivot_config: Optional[dict[str, Any]]
-    chart_type: Optional[str]
-    charts: list[dict[str, Any]]          # 多图表 [{pivot_config, chart_type, data, vega_spec, sql, title}]
+    # 全流程统一使用 charts 列表，废弃顶层单图字段
+    charts: list[dict[str, Any]]          # [{pivot_config, chart_type, title, data, sql, vega_spec}]
     suggestions: list[str]
-    sql: Optional[str]
-    data: Optional[list[dict[str, Any]]]
-    vega_spec: Optional[dict[str, Any]]
     reply: str
     error: Optional[str]
+    analyze_retry_count: int              # 校验重试计数（最多 1 次）
+    validation_error: Optional[str]       # 校验失败原因（重试时喂给 LLM）
     trace_log: list[dict[str, Any]]
 
 
@@ -187,8 +191,6 @@ def _snapshot(state: AgentState) -> dict:
     s["trace_log"] = f"<{len(state.get('trace_log', []))} entries>"
     if s.get("charts"):
         s["charts"] = f"<{len(s['charts'])} charts>"
-    if s.get("data"):
-        s["data"] = f"<{len(s['data'])} rows>"
     if s.get("conversation_history"):
         s["conversation_history"] = f"<{len(s['conversation_history'])} msgs>"
     return s
@@ -199,18 +201,27 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
     if session_id is None:
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
+    charts = state.get("charts", []) or []
+    data_rows = 0
+    sql_snippets = []
+    for ch in charts:
+        d = ch.get("data", []) or []
+        data_rows += len(d)
+        sql_snippets.append(ch.get("sql", ""))
+
     log_entry = {
         "session_id": session_id,
         "timestamp": datetime.now().isoformat(),
         "user_message": state.get("user_message", ""),
         "intent": state.get("intent"),
-        "pivot_config": state.get("pivot_config"),
-        "sql": state.get("sql"),
-        "data_rows": len(state.get("data", []) or []),
-        "chart_count": len(state.get("charts", [])),
+        "sql": sql_snippets,
+        "data_rows": data_rows,
+        "chart_count": len(charts),
         "reply": state.get("reply"),
         "suggestions": state.get("suggestions"),
         "error": state.get("error"),
+        "validation_error": state.get("validation_error"),
+        "analyze_retry_count": state.get("analyze_retry_count"),
         "trace": state.get("trace_log", []),
     }
 
@@ -234,6 +245,67 @@ def _normalize_pivot(raw: Any) -> dict | None:
     return raw
 
 
+def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]:
+    """将 AgentOutput 统一标准化为 state.charts 列表
+
+    支持三种来源：
+    1. response.charts（多图表）
+    2. response.pivot_config（单图表兼容）
+    3. 空列表（chat 模式）
+    """
+    if response.charts:
+        return [c.model_dump() for c in response.charts]
+
+    pc = response.pivot_config
+    if pc is not None:
+        dumped = pc.model_dump()
+        _normalize_pivot(dumped)
+        return [{
+            "title": "",
+            "pivot_config": dumped,
+            "chart_type": response.chart_type or "bar",
+        }]
+
+    return []
+
+
+# ---- 校验逻辑 ----
+
+def _validate_chart(chart: dict[str, Any]) -> str | None:
+    """校验单个图表配置，返回错误信息或 None"""
+    pc = chart.get("pivot_config")
+    if not pc or not isinstance(pc, dict):
+        return f"图表「{chart.get('title', '未命名')}」缺少 pivot_config"
+
+    values = pc.get("values", [])
+    if not isinstance(values, list) or len(values) == 0:
+        return f"图表「{chart.get('title', '未命名')}」的 values 为空，必须至少指定一个聚合值"
+
+    for i, v in enumerate(values):
+        if not isinstance(v, dict):
+            return f"图表「{chart.get('title', '未命名')}」values[{i}] 不是有效对象"
+        if not v.get("id"):
+            return f"图表「{chart.get('title', '未命名')}」values[{i}] 缺少 id 字段"
+
+    axes = pc.get("axes", [])
+    if not isinstance(axes, list) or len(axes) == 0:
+        return f"图表「{chart.get('title', '未命名')}」的 axes 为空，必须至少指定一个维度字段"
+
+    return None
+
+
+def _validate_charts(charts: list[dict[str, Any]]) -> str | None:
+    """校验整个 charts 列表，返回第一条错误或 None"""
+    if not charts:
+        return "未生成任何图表配置"
+
+    for chart in charts:
+        err = _validate_chart(chart)
+        if err:
+            return err
+    return None
+
+
 # ---- Agent Nodes ----
 
 def analyze_node(state: AgentState) -> AgentState:
@@ -246,12 +318,19 @@ def analyze_node(state: AgentState) -> AgentState:
     })
 
     try:
-        # 尝试 Structured Output（DeepSeek 可能不支持，静默回退）
         structured_llm = _get_structured_llm()
 
         messages = [
             {"role": "system", "content": _get_base_system_prompt()},
         ]
+
+        # 如果是重试，追加校验失败的反馈信息
+        if state.get("analyze_retry_count", 0) > 0 and state.get("validation_error"):
+            messages.append({
+                "role": "system",
+                "content": f"注意：上一次生成的配置在校验中未通过，请根据以下反馈修正：\n{state['validation_error']}\n请重新生成符合要求的配置。",
+            })
+
         for h in (state.get("conversation_history") or []):
             messages.append(h)
         messages.append({"role": "user", "content": state["user_message"]})
@@ -295,11 +374,9 @@ def analyze_node(state: AgentState) -> AgentState:
                 except json.JSONDecodeError:
                     raise ValueError(f"LLM 返回无法解析为 JSON: {content[:200]}")
 
-            # 手动构建 AgentOutput
-            # 提取 charts（多图表）或 pivot_config（单图表）
+            # 手动构建 AgentOutput（兼容单图/多图两种格式）
             raw_charts = result.get("charts")
             if isinstance(raw_charts, list) and len(raw_charts) > 0:
-                # 多图表模式
                 response = AgentOutput(
                     intent=result.get("intent", "chart"),
                     reply=result.get("reply", ""),
@@ -319,8 +396,6 @@ def analyze_node(state: AgentState) -> AgentState:
             state["intent"] = "chat"
             state["reply"] = response.reply
             state["suggestions"] = []
-            state["pivot_config"] = None
-            state["chart_type"] = "bar"
             state["charts"] = []
             state["error"] = None
             trace.append({"step": "analyze_complete", "intent": "chat"})
@@ -329,23 +404,18 @@ def analyze_node(state: AgentState) -> AgentState:
             state["suggestions"] = response.suggestions or []
             state["reply"] = response.reply
             state["error"] = None
-            if response.charts:
-                state["charts"] = [c.model_dump() for c in response.charts]
-                state["pivot_config"] = None
-                state["chart_type"] = "bar"
-                trace.append({"step": "analyze_complete", "intent": "chart", "chart_count": len(response.charts)})
-            else:
-                pc = response.pivot_config
-                state["pivot_config"] = pc.model_dump() if pc else None
-                state["chart_type"] = response.chart_type or "bar"
-                state["charts"] = []
-                trace.append({"step": "analyze_complete", "intent": "chart", "has_config": pc is not None})
+            state["charts"] = _normalize_charts_from_output(response)
+            trace.append({
+                "step": "analyze_complete",
+                "intent": "chart",
+                "chart_count": len(state["charts"]),
+            })
 
     except Exception as e:
         logger.error("Agent 分析失败: %s", e, exc_info=True)
         state["error"] = str(e)
         state["reply"] = f"分析时出错：{e}"
-        state["chart_type"] = "bar"
+        state["charts"] = []
         trace.append({"step": "analyze_error", "error": str(e)})
 
     trace.append({
@@ -357,8 +427,61 @@ def analyze_node(state: AgentState) -> AgentState:
     return state
 
 
+def validate_config_node(state: AgentState) -> AgentState:
+    """校验节点：校验 charts 配置合法性，不通过则回流 analyze 重试（最多 1 次）"""
+    trace = state.get("trace_log", [])
+    trace.append({
+        "step": "validate_start",
+        "timestamp": datetime.now().isoformat(),
+        "input_snapshot": _snapshot(state),
+    })
+
+    if state.get("intent") == "chat" or not state.get("charts"):
+        # chat 模式或空图表 → 直接通过
+        state["validation_error"] = None
+        trace.append({"step": "validate_skip", "reason": "no_charts"})
+        state["trace_log"] = trace
+        return state
+
+    err = _validate_charts(state["charts"])
+    if err is None:
+        # 校验通过
+        state["validation_error"] = None
+        trace.append({"step": "validate_pass"})
+    else:
+        retry_count = state.get("analyze_retry_count", 0)
+        state["validation_error"] = err
+
+        if retry_count < 1:
+            # 未超过重试上限 → 标记重试
+            state["analyze_retry_count"] = retry_count + 1
+            state["reply"] = f"配置校验未通过（第 1 次重试）：{err}"
+            trace.append({
+                "step": "validate_retry",
+                "retry_count": state["analyze_retry_count"],
+                "error": err,
+            })
+        else:
+            # 重试耗尽 → 报错
+            state["error"] = (state.get("error") or "") + f" 配置校验失败（已重试）：{err}"
+            if not state.get("reply"):
+                state["reply"] = f"配置校验多次失败：{err}，请尝试换个问法。"
+            trace.append({
+                "step": "validate_fail",
+                "error": err,
+            })
+
+    trace.append({
+        "step": "validate_end",
+        "timestamp": datetime.now().isoformat(),
+        "output_snapshot": _snapshot(state),
+    })
+    state["trace_log"] = trace
+    return state
+
+
 def execute_node(state: AgentState) -> AgentState:
-    """执行节点：根据配置查询数据，完整暴露 SQL 到 state"""
+    """执行节点：遍历 state.charts 逐个查询数据，完整暴露 SQL"""
     trace = state.get("trace_log", [])
     trace.append({
         "step": "execute_start",
@@ -371,64 +494,30 @@ def execute_node(state: AgentState) -> AgentState:
         state["trace_log"] = trace
         return state
 
-    charts = state.get("charts", [])
-    if charts:
-        # 多图表：逐个执行
-        for chart in charts:
-            pc_dict = chart.get("pivot_config") or chart.get("config")
-            ct = chart.get("chart_type", "bar")
-            if pc_dict:
-                pc_dict["chart_type"] = ct
-                try:
-                    cfg = PivotConfig(**pc_dict)
-                    res = execute_pivot(cfg)
-                    chart["data"] = res.get("data", [])
-                    chart["vega_spec"] = res.get("vega_spec", {})
-                    chart["sql"] = res.get("sql")
-                except Exception as e2:
-                    logger.error("多图表执行失败: %s, config=%s", e2, pc_dict)
-                    chart["error"] = str(e2)
+    charts = state.get("charts", []) or []
+    for chart in charts:
+        pc_dict = chart.get("pivot_config") or chart.get("config")
+        ct = chart.get("chart_type", "bar")
+        if not pc_dict:
+            chart["error"] = "缺少 pivot_config"
+            continue
 
-        trace.append({"step": "execute_success", "chart_count": len(charts)})
-        state["trace_log"] = trace
-        return state
-
-    # 单图表（向后兼容）
-    pivot_config_dict = state.get("pivot_config")
-    if not pivot_config_dict:
-        trace.append({"step": "execute_skip", "reason": "no_pivot_config"})
-        state["trace_log"] = trace
-        return state
-
-    try:
-        chart_type = state.get("chart_type", "bar")
-        pivot_config_dict["chart_type"] = chart_type
-        config = PivotConfig(**pivot_config_dict)
-        result = execute_pivot(config)
-
-        state["data"] = result.get("data", [])
-        state["vega_spec"] = result.get("vega_spec", {})
-        state["sql"] = result.get("sql")
-
-        trace.append({
-            "step": "execute_success",
-            "timestamp": datetime.now().isoformat(),
-            "row_count": len(state["data"]),
-            "columns": result.get("columns", []),
-            "execution_time_ms": result.get("execution_time_ms"),
-            "sql": state["sql"][:500] if state.get("sql") else None,
-        })
-
-    except Exception as e:
-        logger.error("Agent 查询执行失败: %s", e, exc_info=True)
-        state["error"] = (state.get("error") or "") + f" 查询执行失败: {e}"
-        if state.get("data") is None:
-            state["data"] = []
-        if state.get("sql") is None:
-            state["sql"] = ""
+        pc_dict["chart_type"] = ct
+        try:
+            cfg = PivotConfig(**pc_dict)
+            res = execute_pivot(cfg)
+            chart["data"] = res.get("data", [])
+            chart["vega_spec"] = res.get("vega_spec", {})
+            chart["sql"] = res.get("sql")
+        except Exception as e2:
+            logger.error("图表执行失败: %s, config=%s", e2, pc_dict)
+            chart["error"] = str(e2)
+            chart.setdefault("data", [])
+            chart.setdefault("sql", "")
 
     trace.append({
-        "step": "execute_end",
+        "step": "execute_success",
+        "chart_count": len(charts),
         "timestamp": datetime.now().isoformat(),
         "output_snapshot": _snapshot(state),
     })
@@ -445,9 +534,10 @@ def format_reply_node(state: AgentState) -> AgentState:
         "input_snapshot": _snapshot(state),
     })
 
-    data = state.get("data")
-    if data is not None and len(data) > 0:
-        state["reply"] += f"\n\n查询到 {len(data)} 条结果。"
+    charts = state.get("charts", []) or []
+    total_rows = sum(len(ch.get("data", []) or []) for ch in charts)
+    if total_rows > 0:
+        state["reply"] += f"\n\n共查询到 {total_rows} 条结果。"
 
     log_path = _save_trace_log(state)
     trace.append({"step": "log_saved", "path": log_path})
@@ -462,17 +552,45 @@ def format_reply_node(state: AgentState) -> AgentState:
 
 
 def build_agent() -> Any:
-    """构建 LangGraph Agent（两分支：聊天 / 图表分析）"""
+    """构建 LangGraph Agent（analyze → validate → execute → format_reply）
+
+    validate 条件分支：
+    - "ok"      → execute（校验通过）
+    - "retry"   → analyze（校验失败且未超重试上限）
+    - "fail"    → format_reply（校验失败且重试耗尽）
+    """
     workflow = StateGraph(AgentState)
 
     workflow.add_node("analyze", analyze_node)
+    workflow.add_node("validate", validate_config_node)
     workflow.add_node("execute", execute_node)
     workflow.add_node("format_reply", format_reply_node)
 
     workflow.set_entry_point("analyze")
+    workflow.add_edge("analyze", "validate")
+
+    # validate 条件路由
+    def _route_after_validate(state: AgentState) -> str:
+        if state.get("intent") == "chat":
+            return "format_reply"
+        if state.get("validation_error") and state.get("analyze_retry_count", 0) > 0:
+            # 有校验错误且已标记重试 → 回流 analyze
+            return "analyze"
+        if state.get("validation_error"):
+            # 校验失败且重试耗尽 → 结束
+            return "format_reply"
+        if state.get("charts"):
+            return "execute"
+        return "format_reply"
+
     workflow.add_conditional_edges(
-        "analyze",
-        lambda s: "execute" if s.get("intent") == "chart" else "format_reply",
+        "validate",
+        _route_after_validate,
+        {
+            "analyze": "analyze",
+            "execute": "execute",
+            "format_reply": "format_reply",
+        },
     )
     workflow.add_edge("execute", "format_reply")
     workflow.add_edge("format_reply", END)
@@ -502,11 +620,7 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     if not api_key:
         return {
             "reply": "AI 对话需要配置 OPENAI_API_KEY 环境变量，请先在 .env 文件中设置。",
-            "pivot_config": None,
-            "vega_spec": {},
-            "data": None,
-            "sql": None,
-            "chart_type": "bar",
+            "charts": [],
             "suggestions": [],
             "execution_time_ms": 0,
         }
@@ -518,15 +632,12 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
         "user_message": message,
         "conversation_history": history or [],
         "intent": None,
-        "pivot_config": None,
-        "chart_type": "bar",
         "charts": [],
         "suggestions": [],
-        "sql": None,
-        "data": None,
-        "vega_spec": None,
         "reply": "",
         "error": None,
+        "analyze_retry_count": 0,
+        "validation_error": None,
         "trace_log": [],
     }
 
@@ -535,23 +646,9 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
 
     elapsed = (time.time() - start) * 1000
 
-    charts = result.get("charts", []) or []
-    # 统一返回 charts 列表（单图表也包装成列表）
-    if not charts:
-        pc = result.get("pivot_config")
-        ct = result.get("chart_type", "bar")
-        if pc or result.get("intent") == "chart":
-            charts = [{
-                "title": "",
-                "pivot_config": pc,
-                "chart_type": ct,
-                "data": result.get("data"),
-                "sql": result.get("sql"),
-            }]
-
     return {
         "reply": result.get("reply", ""),
-        "charts": charts,
+        "charts": result.get("charts", []) or [],
         "suggestions": result.get("suggestions", []),
         "execution_time_ms": round(elapsed, 2),
     }

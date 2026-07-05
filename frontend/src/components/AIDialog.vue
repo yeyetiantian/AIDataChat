@@ -54,6 +54,7 @@
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
                   :hide-toolbar="true"
+                  style="min-height: auto;"
                 />
               </div>
             </div>
