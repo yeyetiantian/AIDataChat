@@ -110,7 +110,7 @@ function buildVegaSpec(): Record<string, any> | null {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: 'container',
+    height: 200,
     data: { values: data },
     mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
     encoding,
