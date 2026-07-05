@@ -89,10 +89,10 @@ HIDDEN_IMPORTS = [
 def build_frontend() -> None:
     """构建前端并复制到 backend/dist"""
     print("[build] >>> 构建前端...")
-    subprocess.run(["npm", "install", "--no-audit", "--no-fund"],
-                   cwd=FRONTEND_DIR, check=True)
-    subprocess.run(["npm", "run", "build"],
-                   cwd=FRONTEND_DIR, check=True)
+    _npm = ["npm", "install", "--no-audit", "--no-fund"]
+    subprocess.run(_npm, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
+    _build = ["npm", "run", "build"]
+    subprocess.run(_build, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
 
     if not FRONTEND_DIST.is_dir():
         print("[build] 错误: 前端构建失败，未生成 dist 目录")
@@ -106,6 +106,27 @@ def build_frontend() -> None:
     print(f"[build] 前端构建完成: {target} ({sum(f.stat().st_size for f in target.rglob('*')) / 1024:.0f} KB)")
 
 
+def _ensure_data_dir() -> None:
+    """确保 data/ 目录存在，创建默认数据文件（data/ 在 .gitignore 中）"""
+    data_dir = BACKEND_DIR / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # charts.json：看板数据存储
+    charts_file = data_dir / "charts.json"
+    if not charts_file.exists():
+        charts_file.write_text("[]", encoding="utf-8")
+        print(f"[build] 创建默认 {charts_file}")
+
+    # wide_fields.json：字段注册表缓存
+    fields_file = data_dir / "wide_fields.json"
+    if not fields_file.exists():
+        import json as _json
+        from core.field_registry import WIDE_DETAIL_FIXED_FIELDS
+        default_fields = [f.model_dump() for f in WIDE_DETAIL_FIXED_FIELDS]
+        fields_file.write_text(_json.dumps(default_fields, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[build] 创建默认 {fields_file}（12 个固定字段）")
+
+
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包"""
     print("[build] >>> 执行 PyInstaller 打包...")
@@ -114,6 +135,8 @@ def run_pyinstaller() -> None:
         shutil.rmtree(OUTPUT_DIR)
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
+
+    _ensure_data_dir()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -146,7 +169,14 @@ def run_pyinstaller() -> None:
     cmd.append(str(BACKEND_DIR / "run.py"))
 
     print(f"[build] PyInstaller 命令: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=BACKEND_DIR, check=True)
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("[build] ❌ PyInstaller 失败，stderr:")
+        print(result.stderr[-3000:] if result.stderr else "(无 stderr)")
+        print("[build] ❌ 最后 30 行 stdout:")
+        lines = (result.stdout or "").splitlines()
+        print("\n".join(lines[-30:]))
+        result.check_returncode()
     print(f"[build] PyInstaller 打包完成")
 
 
