@@ -63,7 +63,6 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.event.inputs.version || '1.0.0' }}
         run: python backend/build_package.py
-        shell: ${{ matrix.target == 'windows' && 'bash' || 'bash' }}
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
