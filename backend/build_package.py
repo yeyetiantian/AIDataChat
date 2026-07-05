@@ -89,10 +89,10 @@ HIDDEN_IMPORTS = [
 def build_frontend() -> None:
     """构建前端并复制到 backend/dist"""
     print("[build] >>> 构建前端...")
-    subprocess.run(["npm", "install", "--no-audit", "--no-fund"],
-                   cwd=FRONTEND_DIR, check=True)
-    subprocess.run(["npm", "run", "build"],
-                   cwd=FRONTEND_DIR, check=True)
+    _npm = ["npm", "install", "--no-audit", "--no-fund"]
+    subprocess.run(_npm, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
+    _build = ["npm", "run", "build"]
+    subprocess.run(_build, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
 
     if not FRONTEND_DIST.is_dir():
         print("[build] 错误: 前端构建失败，未生成 dist 目录")
