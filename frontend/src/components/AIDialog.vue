@@ -144,8 +144,8 @@ const savingMessage = ref<any>(null)
   const rendererRefs = ref<Record<number, ChartRendererHandle | null>>({})
 
 const suggestions = [
-  '各车型触发次数分布',
-  '按规则统计每日触发次数趋势',
+  '各车辆触发次数占比',
+  '按周统计报警趋势',
   '各任务下规则执行TOP10',
 ]
 

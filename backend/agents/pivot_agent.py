@@ -166,15 +166,15 @@ suggestions 字段必须为空列表（无需生成追问）。
 每个图表包含 title、pivot_config、chart_type。
 
 单图表示例（默认行为）：
-{{{{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
-]}}}}
+{{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
+  {{ "title": "各车型报警次数", "pivot_config": {{ "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }}
+]}}
 
 多图表示例（仅当用户明确要求时才使用）：
-{{{{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
-  {{{{ "title": "各车型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "vehicle_type", "alias": "车型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}},
-  {{{{ "title": "各规则类型报警次数", "pivot_config": {{{{ "axes": [{{{{"field": "rule_type", "alias": "规则类型"}}}}], "values": [{{{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}}}] }}}}, "chart_type": "bar" }}}}
-]}}}}
+{{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
+  {{ "title": "各车型报警次数", "pivot_config": {{ "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }},
+  {{ "title": "各规则类型报警次数", "pivot_config": {{ "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }}
+]}}
 
 **修改已有图表**：当用户要求修改（如"改成饼图""只看SUV""按天统计"），只修改当前对话中的**最后一个图表配置**，保持 charts 数量不变。
 
@@ -267,9 +267,17 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
 # ---- 数据标准化 ----
 
 def _normalize_pivot(raw: Any) -> dict | None:
-    """确保 pivot_config 的 values 每条都有 id，LLM 可能遗漏"""
+    """确保 pivot_config 的 values 每条都有 id，且 list 字段不会被 LLM 误输出为 dict"""
     if not isinstance(raw, dict):
         return None
+    # 确保 list 字段是列表（LLM 可能输出单个 dict）
+    for key in ("legend", "axes", "filters", "values", "row_filters", "col_filters", "calculated_fields", "calculated_items", "order_by"):
+        val = raw.get(key)
+        if isinstance(val, dict):
+            raw[key] = [val]
+        elif val is None:
+            raw[key] = []
+    # 给 values 补充 id
     values = raw.get("values", [])
     if isinstance(values, list):
         for i, v in enumerate(values):
@@ -300,6 +308,43 @@ def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]
         }]
 
     return []
+
+
+# ---- JSON 解析辅助 ----
+
+def _try_parse_json(text: str) -> dict | None:
+    """尝试解析 JSON，自动处理 LLM 输出的双花括号"""
+    if not text:
+        return None
+    # 先试原生解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # 双花括号转单花括号
+    cleaned = text.replace("{{", "{").replace("}}", "}")
+    if cleaned != text:
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _extract_json_fragment(text: str) -> str | None:
+    """从文本中提取 JSON 片段（跳过前置文字）"""
+    # 找第一个 {（或 {{）和最后一个 }（或 }}）
+    import re
+    start = text.find('{')
+    if start < 0:
+        start = text.find('{{')
+    if start < 0:
+        return None
+    # 从后往前找结束
+    end = text.rfind('}')
+    if end < 0 or end <= start:
+        return None
+    return text[start:end + 1]
 
 
 # ---- 校验逻辑 ----
@@ -400,23 +445,37 @@ def analyze_node(state: AgentState) -> AgentState:
                 "raw_output": content[:1000],
             })
 
+            # 尝试多种方式解析 JSON
             import re
             result = None
+
+            # 方式1: 提取 ```json ... ``` 或 ``` ... ``` 中的内容
             json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
             if json_match:
-                try:
-                    result = json.loads(json_match.group(1).strip())
-                except json.JSONDecodeError:
-                    pass
+                raw = json_match.group(1).strip()
+                # 处理 LLM 输出的双花括号（{{ → {, }} → }）
+                result = _try_parse_json(raw)
+
+            # 方式2: 直接解析完整内容（处理双花括号）
             if result is None:
-                try:
-                    result = json.loads(content)
-                except json.JSONDecodeError:
-                    raise ValueError(f"LLM 返回无法解析为 JSON: {content[:200]}")
+                result = _try_parse_json(content)
+
+            # 方式3: 找到第一个 { 或 {{ 开始，最后一个 } 或 }} 结束
+            if result is None:
+                json_str = _extract_json_fragment(content)
+                if json_str:
+                    result = _try_parse_json(json_str)
+
+            if result is None:
+                raise ValueError(f"LLM 返回无法解析为 JSON: {content[:300]}")
 
             # 手动构建 AgentOutput（兼容单图/多图两种格式）
             raw_charts = result.get("charts")
             if isinstance(raw_charts, list) and len(raw_charts) > 0:
+                # 逐图表标准化 pivot_config
+                for c in raw_charts:
+                    if isinstance(c, dict) and c.get("pivot_config"):
+                        _normalize_pivot(c["pivot_config"])
                 response = AgentOutput(
                     intent=result.get("intent", "chart"),
                     reply=result.get("reply", ""),

@@ -580,6 +580,10 @@ class PivotSQLBuilder:
             return self._build_group_by()
 
         legend_values = self._legend_value_tuples()
+        if not legend_values:
+            logger.warning("legend 值查询为空，降级为 GROUP BY 模式")
+            return self._build_group_by()
+
         axis_select = [_axis_expr(a) for a in self.axes]
         axis_group = ", ".join(_group_field(a) for a in self.axes) if self.axes else "()"
         pivot_cols: list[str] = []
@@ -628,10 +632,10 @@ class PivotSQLBuilder:
                 else:
                     agg_inner = f'{agg}(CASE WHEN {cond} THEN {col_ref} END)'
                 pivot_cols.append(f'{agg_inner} AS "{pivot_col_name}"')
-            # 记录第一个图例组合的列名，供 ORDER BY 使用
-            vid = vdef.get("id")
-            if vid and vid not in self._pivot_value_col_map:
-                self._pivot_value_col_map[vid] = pivot_col_name
+                # 记录第一个图例组合的列名，供 ORDER BY / TOP N 使用
+                vid = vdef.get("id")
+                if vid and vid not in self._pivot_value_col_map:
+                    self._pivot_value_col_map[vid] = pivot_col_name
 
         if axis_select:
             select_sql = ", ".join(axis_select + pivot_cols)
@@ -797,7 +801,11 @@ class PivotSQLBuilder:
         else:
             for v in self.values:
                 if v.get("id") == by:
-                    by_column = v.get("field") or v.get("alias") or v["id"]
+                    # PIVOT 模式但 map 中无此 key：用 alias（列名格式 {图例值}_{别名}）
+                    if self.legend:
+                        by_column = v.get("alias") or v.get("field") or v["id"]
+                    else:
+                        by_column = v.get("field") or v.get("alias") or v["id"]
                     break
 
         return f"SELECT * FROM {src}\nQUALIFY ROW_NUMBER() OVER (ORDER BY \"{by_column}\" {direction}) <= {count}"
@@ -816,7 +824,11 @@ class PivotSQLBuilder:
                 # 非 PIVOT 模式：如果 field 是 value 的 id（如 "val_1"），解析为实际 SQL 列名
                 for v in self.values:
                     if v.get("id") == field:
-                        field = v.get("field") or v.get("alias") or field
+                        # PIVOT 模式但 map 中无此 key：用 alias（列名格式 {图例值}_{别名}）
+                        if self.legend:
+                            field = v.get("alias") or v.get("field") or v["id"]
+                        else:
+                            field = v.get("field") or v.get("alias") or field
                         break
             clauses.append(f'"{field}" {ob.get("direction", "desc")}')
         return f"\nORDER BY {', '.join(clauses)}"
