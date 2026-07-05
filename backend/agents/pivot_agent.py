@@ -178,6 +178,9 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 **修改已有图表**：当用户要求修改（如"改成饼图""只看SUV""按天统计"），只修改当前对话中的**最后一个图表配置**，保持 charts 数量不变。
 
+### ORDER BY 注意事项
+order_by 中的 field 中的 by 必须使用**字段名**（如 "alarm_time"、"vehicle_type"），**不要使用 value 的 id**（如 "val_1"、"val_2"）。
+
 ### 图表字段说明
 - axes: 横轴/行维度字段（GROUP BY）
 - legend: 图例字段（PIVOT ON，用于多系列对比）

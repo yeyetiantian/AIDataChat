@@ -268,8 +268,19 @@ function buildVegaSpec(): Record<string, any> | null {
 
   const xField = axisField
   const xTitle = axisTitle
-  const yField = values[0]?.field || ''
-  const yTitle = values[0]?.alias || yField
+
+  // PIVOT 模式（有 legend）：Y 轴字段从实际数据中检测，而非从 config.field
+  let yField: string
+  let yTitle: string
+  if (legend.length && data && data.length) {
+    const axisKeys = new Set(axes.map((a: any) => a.alias || a.field))
+    if (legend.length) legend.forEach((l: any) => axisKeys.add(l.alias || l.field))
+    yField = Object.keys(data[0]).find(k => !axisKeys.has(k)) || ''
+    yTitle = values[0]?.alias || yField
+  } else {
+    yField = values[0]?.field || ''
+    yTitle = values[0]?.alias || yField
+  }
 
   const encoding: any = {}
   if (chartType === 'pie') {

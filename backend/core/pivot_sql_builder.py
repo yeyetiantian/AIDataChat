@@ -930,11 +930,21 @@ def build_vega_spec(config: PivotConfig) -> dict[str, Any]:
         first_val = values[0] if values else {}
         val_name = first_val.get("field") or first_val.get("alias") or first_val.get("id", "count")
         if legend:
-            # 有图例 → 堆叠/分组条形图
+            # PIVOT 模式：列名是 {图例值}_{值别名}，回传标记给前端自动检测
+            val_name = first_val.get("alias") or first_val.get("id", "count")
             legend_field = legend[0]
             legend_name = legend_field.get("alias") or legend_field["field"]
             encoding["y"] = {"field": val_name, "type": "quantitative", "title": first_val.get("alias") or val_name}
             encoding["color"] = {"field": legend_name, "type": "nominal", "title": legend_name}
+            # 标记 PIVOT 模式，前端从实际数据列中匹配 Y 字段
+            spec = {
+                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                "title": "数据分析",
+                "data": {"values": []},
+                "mark": {"type": chart_type, "tooltip": True, "point": chart_type == "line"},
+                "encoding": encoding,
+                "_pivot": True,
+            }
         else:
             encoding["y"] = {"field": val_name, "type": "quantitative", "title": first_val.get("alias") or val_name}
 
