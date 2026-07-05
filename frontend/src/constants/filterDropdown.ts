@@ -11,7 +11,7 @@ export const STRING_FILTER_FIELDS = ['expression', 'alarm_value'] as const
 export const STATIC_DROPDOWN_DATA: Record<string, string[]> = {
   person: ['张三', '李四', '王五'],
   vehicle_type: ['SUV', '轿车'],
-  vehicle: ['LSGNB8P50TS013215-SGM001', 'LSGNB8P52TS035135-SGM002', 'LSGNB8P56TS013218-SGM003'],
+  vehicle: ['LSGNB8P50TS013215-UM26OV041', 'LSGNB8P52TS035135-UM26OV042', 'LSGNB8P56TS013218-UM26OV043'],
   task: ['C1-2 PHEV 工程车基本工作信息', 'C1UL 静态电流监控5-13'],
   rule_name: ['车辆实时EREV工作比例', '休眠持续时间', '横向控制激活次数及时长统计'],
   rule_type: ['统计', '报警'],
