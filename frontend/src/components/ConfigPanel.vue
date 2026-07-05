@@ -40,7 +40,7 @@
             <div class="zone-body" :class="{ empty: filters.length === 0 }">
               <div v-if="filters.length === 0" class="zone-placeholder">拖入字段</div>
               <div v-for="(item, i) in filters" :key="i" class="zone-item">
-                <span class="zone-item-field">{{ item.field }}</span>
+                <span class="zone-item-field">{{ item.alias || item.field }}</span>
                 <template v-if="isTimeFilterField(item.field)">
                   <el-select
                     :model-value="item.op"
@@ -197,6 +197,18 @@
               <div v-if="axes.length === 0" class="zone-placeholder">拖入字段</div>
               <div v-for="(item, i) in axes" :key="i" class="zone-item">
                 <span class="zone-item-field">{{ item.alias || item.field }}</span>
+                <el-select
+                  v-if="isTimeFilterField(item.field)"
+                  :model-value="item.group ?? 'raw'"
+                  size="small"
+                  style="width:68px"
+                  @update:model-value="(v) => onAxisGroupChange(item, v)"
+                >
+                  <el-option label="原始值" value="raw" />
+                  <el-option label="天" value="day" />
+                  <el-option label="周" value="week" />
+                  <el-option label="月" value="month" />
+                </el-select>
                 <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'axes')" />
               </div>
             </div>
@@ -244,7 +256,16 @@
         <div class="extra-row">
           <div class="extra-item">
             <label>排序</label>
-            <el-select v-model="sortField" size="small" clearable placeholder="字段" style="width:100px">
+            <el-select
+              v-model="sortField"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              size="small"
+              clearable
+              placeholder="字段"
+              style="width:160px"
+            >
               <el-option v-for="o in sortOptions" :key="o.value" :label="o.label" :value="o.value" />
             </el-select>
             <el-select v-model="sortDir" size="small" style="width:60px">
@@ -252,10 +273,10 @@
               <el-option label="升序" value="asc" />
             </el-select>
           </div>
-          <div class="extra-item">
+          <!-- <div class="extra-item">
             <label>Limit</label>
             <el-input-number v-model="limitVal" :min="1" :max="100000" size="small" controls-position="right" style="width:90px" />
-          </div>
+          </div> -->
           <div class="extra-item">
             <label>图表</label>
             <el-select v-model="chartType" size="small" style="width:90px">
@@ -339,7 +360,7 @@ const stateData = reactive({
   legend: [] as LegendItem[],
   values: [] as ValueItem[],
   // 排序 / Limit / HAVING / 图表类型
-  sortField: '',
+  sortField: [] as string[],
   sortDir: 'desc' as string,
   limitVal: 10000,
   having: [] as { field: string; op: string; value: any }[],
@@ -469,6 +490,18 @@ function parseNumericValue(val: unknown): number | null {
   return Number.isNaN(num) ? null : num
 }
 
+function getFieldAliasCn(fieldName: string): string {
+  for (const group of stateData.groups) {
+    const found = group.fields.find(f => f.name === fieldName)
+    if (found) return found.alias_cn
+  }
+  return fieldName
+}
+
+function ensureFilterAlias(item: FilterItem): FilterItem {
+  return { ...item, alias: item.alias || getFieldAliasCn(item.field) }
+}
+
 function normalizeRangeFilterValue(item: FilterItem): FilterItem {
   if (item.op === 'between') {
     const v = item.value
@@ -483,34 +516,35 @@ function normalizeRangeFilterValue(item: FilterItem): FilterItem {
 }
 
 function normalizeFilterForUI(item: FilterItem): FilterItem {
-  if (isTimeFilterField(item.field) || isStringFilterField(item.field)) {
-    return normalizeRangeFilterValue(item)
+  const base = ensureFilterAlias(item)
+  if (isTimeFilterField(base.field) || isStringFilterField(base.field)) {
+    return ensureFilterAlias(normalizeRangeFilterValue(base))
   }
-  if (isNumericFilterField(item.field)) {
-    if (item.op === 'between') {
-      const v = item.value
+  if (isNumericFilterField(base.field)) {
+    if (base.op === 'between') {
+      const v = base.value
       if (Array.isArray(v)) {
-        return { ...item, value: [parseNumericValue(v[0]), parseNumericValue(v[1])] }
+        return ensureFilterAlias({ ...base, value: [parseNumericValue(v[0]), parseNumericValue(v[1])] })
       }
       if (typeof v === 'string' && v.includes(',')) {
         const [a, b] = v.split(',')
-        return { ...item, value: [parseNumericValue(a), parseNumericValue(b)] }
+        return ensureFilterAlias({ ...base, value: [parseNumericValue(a), parseNumericValue(b)] })
       }
-      return { ...item, value: [null, null] }
+      return ensureFilterAlias({ ...base, value: [null, null] })
     }
-    return { ...item, value: parseNumericValue(item.value) }
+    return ensureFilterAlias({ ...base, value: parseNumericValue(base.value) })
   }
-  const op = item.op === '=' ? 'in' : (item.op || 'in')
+  const op = base.op === '=' ? 'in' : (base.op || 'in')
   let values: string[]
-  if (Array.isArray(item.value)) {
-    values = item.value.map(String)
-  } else if (typeof item.value === 'string' && item.value !== '') {
-    values = item.value.split(',').map(s => s.trim())
+  if (Array.isArray(base.value)) {
+    values = base.value.map(String)
+  } else if (typeof base.value === 'string' && base.value !== '') {
+    values = base.value.split(',').map(s => s.trim())
   } else {
     values = ['']
   }
   if (values.length === 0) values = ['']
-  return { ...item, op, value: values }
+  return ensureFilterAlias({ ...base, op, value: values })
 }
 
 function serializeFilterForApi(item: FilterItem): FilterItem {
@@ -577,6 +611,17 @@ function onShowAsChange(index: number, val: string) {
   }
 }
 
+function ensureAxisGroup(item: AxisItem): AxisItem {
+  if (isTimeFilterField(item.field)) {
+    return { ...item, group: item.group ?? 'raw' }
+  }
+  return item
+}
+
+function onAxisGroupChange(item: AxisItem, val: string) {
+  item.group = (val || 'raw') as AxisItem['group']
+}
+
 function onDragStart(event: DragEvent, field: FieldDef) {
   event.dataTransfer?.setData('application/json', JSON.stringify({
     name: field.name, alias_cn: field.alias_cn, category: field.category, data_type: field.data_type,
@@ -588,23 +633,24 @@ function onDrop(event: DragEvent, zone: ZoneType) {
   const raw = event.dataTransfer?.getData('application/json')
   if (!raw) return
   const field: FieldDef = JSON.parse(raw)
-  const item = { field: field.name, alias: field.alias_cn }
   if (zone === 'filters') {
     const isTime = isTimeFilterField(field.name)
     const isNumeric = isNumericFilterField(field.name)
     const isString = isStringFilterField(field.name)
     let newFilter: FilterItem
     if (isTime || isString) {
-      newFilter = { field: field.name, op: '=', value: '' }
+      newFilter = { field: field.name, alias: field.alias_cn, op: '=', value: '' }
     } else if (isNumeric) {
-      newFilter = { field: field.name, op: '=', value: null }
+      newFilter = { field: field.name, alias: field.alias_cn, op: '=', value: null }
     } else {
-      newFilter = { field: field.name, op: 'in', value: [''] }
+      newFilter = { field: field.name, alias: field.alias_cn, op: 'in', value: [''] }
       loadFilterDropdown(field.name)
     }
     stateData.filters.push(newFilter)
   } else if (zone === 'axes') {
-    stateData.axes.push({ field: field.name, alias: field.alias_cn, sort: 'asc' })
+    const axisItem: AxisItem = { field: field.name, alias: field.alias_cn, sort: 'asc' }
+    if (isTimeFilterField(field.name)) axisItem.group = 'raw'
+    stateData.axes.push(axisItem)
   } else if (zone === 'legend') {
     stateData.legend.push({ field: field.name, alias: field.alias_cn })
   } else if (zone === 'values') {
@@ -633,13 +679,24 @@ async function handleQuery() {
   try {
     const config = {
       filters: stateData.filters.map(serializeFilterForApi),
-      axes: stateData.axes.map(a => ({ field: a.field, alias: a.alias })),
+      axes: stateData.axes.map(a => {
+        const axis: { field: string; alias?: string; group?: AxisItem['group'] } = {
+          field: a.field,
+          alias: a.alias,
+        }
+        if (isTimeFilterField(a.field)) {
+          axis.group = a.group ?? 'raw'
+        } else if (a.group) {
+          axis.group = a.group
+        }
+        return axis
+      }),
       legend: stateData.legend.map(l => ({ field: l.field, alias: l.alias })),
       values: stateData.values.map(v => ({
         id: v.id, field: v.field, aggregation: v.aggregation,
         alias: v.alias, show_as: v.show_as,
       })),
-      order_by: stateData.sortField ? [{ field: stateData.sortField, direction: stateData.sortDir }] : [],
+      order_by: stateData.sortField.map(field => ({ field, direction: stateData.sortDir })),
       limit: stateData.limitVal,
       having: stateData.having.map(h => ({ field: h.field, op: h.op, value: h.value })),
       chart_type: stateData.chartType,
@@ -657,7 +714,7 @@ function handleClear() {
   stateData.axes = []
   stateData.legend = []
   stateData.values = []
-  stateData.sortField = ''
+  stateData.sortField = []
   stateData.sortDir = 'desc'
   stateData.limitVal = 10000
   stateData.having = []
@@ -672,7 +729,7 @@ defineExpose({
         if (isDropdownFilterField(f.field)) loadFilterDropdown(f.field)
       })
     }
-    if (config.axes) stateData.axes = config.axes
+    if (config.axes) stateData.axes = config.axes.map(ensureAxisGroup)
     if (config.legend) stateData.legend = config.legend
     if (config.values) stateData.values = config.values
   },
@@ -684,6 +741,7 @@ onMounted(async () => {
     const resp = await fetch('/api/fields')
     if (resp.ok) {
       stateData.groups = await resp.json()
+      stateData.filters = stateData.filters.map(ensureFilterAlias)
     }
   } catch (e) {
     console.error('[ConfigPanel] 获取字段列表失败', e)
@@ -885,6 +943,7 @@ onMounted(async () => {
   background: #f0f9eb;
   border-radius: 4px;
   font-size: 12px;
+  justify-content: space-between;
 }
 
 .zone-item-field {

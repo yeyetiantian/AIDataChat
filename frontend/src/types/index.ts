@@ -4,12 +4,13 @@ export interface FilterItem {
   field: string
   op: string
   value: any
+  alias?: string
 }
 
 export interface AxisItem {
   field: string
   alias?: string
-  group?: 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
+  group?: 'raw' | 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
   sort?: 'asc' | 'desc'
 }
 
