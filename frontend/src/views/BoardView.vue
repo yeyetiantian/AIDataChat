@@ -2,11 +2,11 @@
   <div class="board-view">
     <section class="board-workspace">
       <div class="board-main">
-        <div v-if="previewResult" class="preview-panel">
+        <div v-if="previewResult && !selectedBoard" class="preview-panel">
           <div class="preview-header">
             <div class="preview-copy">
               <strong>当前预览</strong>
-              <span>通过右侧报表配置生成，可直接保存到看板</span>
+              <span>通过右侧透视表配置生成，可直接保存到看板</span>
             </div>
             <div class="preview-actions">
               <el-button size="small" @click="clearPreview">清空预览</el-button>
@@ -26,25 +26,17 @@
         </div>
 
         <div class="board-list-wrap">
-          <ChartBoard @edit="loadToAnalysis" />
+          <ChartBoard
+            :selected-card-key="selectedBoardKey"
+            @edit="loadToAnalysis"
+            @toggle-config="handleToggleConfig"
+          />
         </div>
       </div>
 
-      <button
-        type="button"
-        class="sidebar-toggle"
-        :class="{ 'is-open': showConfigPanel }"
-        @click="showConfigPanel = !showConfigPanel"
-      >
-        <el-icon :size="16">
-          <ArrowRightBold v-if="showConfigPanel" />
-          <ArrowLeftBold v-else />
-        </el-icon>
-      </button>
-
       <aside class="board-sidebar" :class="{ 'is-open': showConfigPanel }">
         <div class="board-sidebar-inner">
-          <ConfigPanel v-if="showConfigPanel" :api="pivotApi" />
+          <ConfigPanel ref="configPanelRef" v-if="showConfigPanel" :api="pivotApi" />
         </div>
       </aside>
     </section>
@@ -65,7 +57,7 @@
     <el-dialog
       v-model="showAiDialog"
       title="AI 对话分析"
-      width="700px"
+      width="600px"
       top="5vh"
       destroy-on-close
     >
@@ -86,11 +78,26 @@
         <el-button type="primary" :loading="chartStore.loading" @click="handlePreviewSave">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showCreateDialog" title="新增看板" width="420px">
+      <el-form label-position="top">
+        <el-form-item label="看板名称">
+          <el-input v-model="createTitle" placeholder="请输入看板名称" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="createDesc" type="textarea" :rows="3" placeholder="请输入备注" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showCreateDialog = false">取消</el-button>
+        <el-button type="primary" :loading="chartStore.loading" @click="handleCreateBoard">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
@@ -100,18 +107,35 @@ import ChartBoard from '@/components/ChartBoard.vue'
 import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
 import VegaLiteRenderer from '@/components/VegaLiteRenderer.vue'
-import { ArrowLeftBold, ArrowRightBold, ChatDotRound } from '@element-plus/icons-vue'
+import { ChatDotRound } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const chartStore = useChartStore()
+
+type ConfigPanelHandle = {
+  setDefaultValues: (config: any) => void
+  resetConfig: () => void
+}
+
+type ToggleBoardCard = SavedChart | {
+  id: string | number
+  pivot_config: any
+  chart_type: string
+}
 
 const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
 const previewResult = ref<PivotResponse | null>(null)
 const previewConfig = ref<any>(null)
 const showSaveDialog = ref(false)
+const showCreateDialog = ref(false)
 const saveTitle = ref('')
 const saveDesc = ref('')
+const createTitle = ref('空白看板')
+const createDesc = ref('')
+const selectedBoardKey = ref<string | number | null>(null)
+const configPanelRef = ref<ConfigPanelHandle | null>(null)
+const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
 
 function loadToAnalysis(chart: SavedChart) {
   void chart
@@ -132,7 +156,15 @@ async function pivotApi(config: any) {
       throw new Error(err.detail || '查询失败')
     }
 
-    previewResult.value = await resp.json()
+    const result: PivotResponse = await resp.json()
+    previewResult.value = result
+    if (selectedBoard.value) {
+      await chartStore.updateChart(selectedBoard.value.id, {
+        pivot_config: config,
+        chart_type: config?.chart_type || 'bar',
+        data: result.data || [],
+      })
+    }
   } catch (e: any) {
     ElMessage.error(e.message || '查询失败')
   }
@@ -155,7 +187,7 @@ function clearPreview() {
 function openSaveDialog() {
   if (!previewResult.value || !previewConfig.value) return
   if (!saveTitle.value.trim()) {
-    saveTitle.value = '未命名图表'
+    saveTitle.value = selectedBoard.value?.title || '未命名图表'
   }
   showSaveDialog.value = true
 }
@@ -180,6 +212,110 @@ async function handlePreviewSave() {
   saveTitle.value = ''
   saveDesc.value = ''
 }
+
+function openCreateDialog() {
+  if (chartStore.charts.length >= MAX_BOARD_CHARTS) {
+    ElMessage.warning(`看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
+    return
+  }
+  createTitle.value = '空白看板'
+  createDesc.value = ''
+  showCreateDialog.value = true
+}
+
+async function handleCreateBoard() {
+  if (!createTitle.value.trim()) {
+    ElMessage.warning('请填写看板名称')
+    return
+  }
+
+  const emptyConfig: PivotConfig = {
+    filters: [],
+    axes: [],
+    legend: [],
+    values: [],
+    order_by: [],
+    limit: 10000,
+    having: [],
+    grand_total: false,
+    subtotals: false,
+  }
+
+  const created = await chartStore.saveChart(
+    createTitle.value.trim(),
+    emptyConfig,
+    createDesc.value.trim(),
+    'bar',
+    null,
+  )
+
+  if (!created) {
+    ElMessage.warning(chartStore.error || '创建看板失败')
+    return
+  }
+
+  selectedBoardKey.value = created.id
+  previewResult.value = null
+  previewConfig.value = null
+  saveTitle.value = ''
+  saveDesc.value = ''
+  showCreateDialog.value = false
+  showConfigPanel.value = true
+  await syncConfigPanel(created)
+}
+
+async function syncConfigPanel(chart: SavedChart | null) {
+  if (!showConfigPanel.value) return
+  await nextTick()
+
+  if (!configPanelRef.value) return
+
+  if (!chart) {
+    configPanelRef.value.resetConfig()
+    return
+  }
+
+  if (chart.pivot_config) {
+    configPanelRef.value.setDefaultValues(chart.pivot_config)
+    return
+  }
+
+  configPanelRef.value.resetConfig()
+}
+
+async function handleToggleConfig(chart: ToggleBoardCard) {
+  if (typeof chart.id !== 'number') return
+  const nextKey = chart.id
+  const isSameCard = selectedBoardKey.value === nextKey
+
+  if (isSameCard && showConfigPanel.value) {
+    showConfigPanel.value = false
+    selectedBoardKey.value = null
+    return
+  }
+
+  selectedBoardKey.value = nextKey
+  showConfigPanel.value = true
+  await syncConfigPanel(chart as SavedChart)
+}
+
+watch(showConfigPanel, async (visible) => {
+  if (!visible) return
+  const current = chartStore.charts.find(chart => chart.id === selectedBoardKey.value) || null
+  await syncConfigPanel(current)
+})
+
+function handleCreateRequest() {
+  openCreateDialog()
+}
+
+onMounted(() => {
+  window.addEventListener('board:create', handleCreateRequest)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('board:create', handleCreateRequest)
+})
 </script>
 
 <style scoped>
@@ -279,35 +415,6 @@ async function handlePreviewSave() {
   overflow-y: auto;
 }
 
-.sidebar-toggle {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(50%, -50%);
-  width: 30px;
-  height: 64px;
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
-  background: #ffffff;
-  color: #409eff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-  z-index: 20;
-  cursor: pointer;
-  transition: right 0.24s ease, background 0.2s ease, color 0.2s ease;
-}
-
-.sidebar-toggle:hover {
-  background: #409eff;
-  color: #ffffff;
-}
-
-.sidebar-toggle.is-open {
-  right: 368px;
-}
-
 .board-ai-button {
   position: fixed;
   bottom: 24px;
@@ -343,10 +450,6 @@ async function handlePreviewSave() {
 
   .board-sidebar-inner {
     width: min(368px, calc(100vw - 48px));
-  }
-
-  .sidebar-toggle.is-open {
-    right: min(368px, calc(100vw - 48px));
   }
 
   .board-ai-button {

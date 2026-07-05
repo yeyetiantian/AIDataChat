@@ -3,7 +3,7 @@
     <!-- 字段列表（固定字段 + 信号字段并排，不收拢） -->
     <div class="panel-section">
       <div class="section-header">
-        <span class="section-title">报表配置</span>
+        <span class="section-title">透视表配置</span>
       </div>
       <div class="section-body">
         <div class="field-search">
@@ -275,11 +275,11 @@ const stateData = reactive({
   loading: false,
 })
 
-// 模板别名（使 template 中直接使用 filters、axes 等变量名）
-const filters = stateData.filters as FilterItem[]
-const axes = stateData.axes as AxisItem[]
-const legend = stateData.legend as LegendItem[]
-const values = stateData.values as ValueItem[]
+// 模板别名（保持对 stateData 的响应式引用）
+const filters = computed(() => stateData.filters)
+const axes = computed(() => stateData.axes)
+const legend = computed(() => stateData.legend)
+const values = computed(() => stateData.values)
 const loading = computed(() => stateData.loading)
 const search = toRef(stateData, 'search')
 const showAsMap = stateData.showAsMap as Record<number, string>

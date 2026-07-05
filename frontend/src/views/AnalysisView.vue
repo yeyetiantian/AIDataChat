@@ -1,6 +1,6 @@
 <template>
   <div class="analysis-view">
-    <!-- 左侧：字段列表 + 表配置（合并为一个组件，完全自包含） -->
+    <!-- 左侧：字段列表 + 透视表配置（合并为一个组件，完全自包含） -->
     <aside class="sidebar-left">
       <ConfigPanel :api="pivotApi" />
     </aside>

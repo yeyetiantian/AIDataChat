@@ -9,39 +9,58 @@
       <el-skeleton :rows="3" animated />
     </div>
 
-    <div v-else-if="store.charts.length === 0" class="board-empty">
+    <div v-else-if="boardCards.length === 0" class="board-empty">
       <el-empty description="还没有保存的图表，在分析页面点击「保存到看板」">
         <el-button type="primary" size="small" @click="router.push('/set')">去分析</el-button>
       </el-empty>
     </div>
 
     <div v-else class="chart-grid">
-      <div v-for="chart in visibleCharts" :key="chart.id" class="chart-card">
+      <div
+        v-for="chart in visibleCharts"
+        :key="getCardKey(chart)"
+        class="chart-card"
+        :class="{ 'is-selected': selectedCardKey === getCardKey(chart), 'is-draft': chart.isDraft }"
+        @dblclick="emit('toggle-config', chart)"
+      >
         <div class="card-header">
-          <span class="card-title">{{ chart.title }}</span>
+          <div class="card-title-wrap">
+            <span class="card-title">{{ chart.title || '空白看板' }}</span>
+            <span v-if="selectedCardKey === getCardKey(chart)" class="selected-chip">已选中</span>
+          </div>
           <div class="card-actions">
-            <el-tooltip content="保存图片" placement="top">
+            <el-tooltip v-if="hasRenderableChart(chart)" content="保存图片" placement="top">
               <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(chart.id, chart.title)">
                 <el-icon :size="16"><Picture /></el-icon>
               </el-button>
             </el-tooltip>
-            <el-tooltip content="查看数据" placement="top">
+            <el-tooltip v-if="hasRenderableChart(chart)" content="查看数据" placement="top">
               <el-button text circle class="action-btn action-btn-primary" @click="openChartData(chart.id)">
                 <el-icon :size="16"><View /></el-icon>
               </el-button>
             </el-tooltip>
-            <el-tooltip content="全屏" placement="top">
+            <el-tooltip v-if="hasRenderableChart(chart)" content="全屏" placement="top">
               <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(chart.id)">
                 <el-icon :size="16"><FullScreen /></el-icon>
               </el-button>
             </el-tooltip>
             <el-tooltip content="编辑" placement="top">
-              <el-button text circle class="action-btn action-btn-primary" @click="$emit('edit', chart)">
+              <el-button
+                text
+                circle
+                class="action-btn action-btn-primary"
+                @click="chart.isDraft ? emit('toggle-config', chart) : emit('edit', chart)"
+              >
                 <el-icon :size="16"><Edit /></el-icon>
               </el-button>
             </el-tooltip>
             <el-tooltip content="删除" placement="top">
-              <el-button text circle class="action-btn action-btn-danger" @click="handleDelete(chart.id)">
+              <el-button
+                text
+                circle
+                class="action-btn action-btn-danger"
+                @click="chart.isDraft ? emit('remove-draft', chart.id) : handleDelete(Number(chart.id))"
+              >
                 <el-icon :size="16"><Delete /></el-icon>
               </el-button>
             </el-tooltip>
@@ -49,7 +68,13 @@
         </div>
         <div class="card-desc" v-if="chart.description">{{ chart.description }}</div>
         <div class="card-chart">
+          <div v-if="!hasRenderableChart(chart)" class="draft-placeholder">
+            <el-icon :size="34" class="draft-placeholder-icon"><Grid /></el-icon>
+            <strong>空白看板</strong>
+            <span>双击卡片打开右侧透视表配置</span>
+          </div>
           <VegaLiteRenderer
+            v-else
             :ref="(el) => setRendererRef(chart.id, el)"
             :data="chart.data"
             :config="chart.pivot_config"
@@ -58,8 +83,10 @@
           />
         </div>
         <div class="card-footer">
-          <el-tag size="small" type="info">{{ chart.chart_type }}</el-tag>
-          <span class="card-time">{{ formatTime(chart.updated_at) }}</span>
+          <el-tag size="small" :type="chart.isDraft ? 'warning' : 'info'">
+            {{ chart.isDraft ? '草稿' : chart.chart_type }}
+          </el-tag>
+          <span class="card-time">{{ chart.updated_at ? formatTime(chart.updated_at) : '未保存' }}</span>
         </div>
       </div>
     </div>
@@ -78,12 +105,27 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, Edit, FullScreen, Picture, View } from '@element-plus/icons-vue'
+import { Delete, Edit, FullScreen, Grid, Picture, View } from '@element-plus/icons-vue'
 import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 
 const store = useChartStore()
 const router = useRouter()
+
+type DraftChart = {
+  id: string
+  title: string
+  description: string
+  pivot_config: Record<string, any> | null
+  chart_type: string
+  data?: Record<string, any>[] | null
+  created_at: string
+  updated_at: string
+  isDraft: true
+}
+
+type SavedBoardCard = SavedChart & { isDraft?: false }
+type BoardCard = SavedBoardCard | DraftChart
 
 type ChartRendererHandle = {
   openDataDialog: () => void
@@ -92,21 +134,48 @@ type ChartRendererHandle = {
   exportSvg: (fileName?: string) => Promise<void>
 }
 
-defineEmits<{
+const props = withDefaults(defineProps<{
+  draftCharts?: DraftChart[]
+  selectedCardKey?: string | number | null
+}>(), {
+  draftCharts: () => [],
+  selectedCardKey: null,
+})
+
+const emit = defineEmits<{
   edit: [chart: SavedChart]
+  'toggle-config': [chart: BoardCard]
+  'remove-draft': [draftId: string]
 }>()
 
 const showDelete = ref(false)
 const deleteId = ref<number | null>(null)
-const visibleCharts = computed(() => store.charts.slice(0, MAX_BOARD_CHARTS))
-const rendererRefs = ref<Record<number, ChartRendererHandle | null>>({})
+const boardCards = computed<BoardCard[]>(() => {
+  const savedCharts = [...store.charts].sort((a, b) => {
+    const timeA = Date.parse(a.created_at || '') || 0
+    const timeB = Date.parse(b.created_at || '') || 0
+    if (timeA !== timeB) return timeA - timeB
+    return Number(a.id) - Number(b.id)
+  })
+  return [...savedCharts, ...props.draftCharts]
+})
+const visibleCharts = computed(() => boardCards.value.slice(0, MAX_BOARD_CHARTS))
+const rendererRefs = ref<Record<string | number, ChartRendererHandle | null>>({})
+
+function getCardKey(chart: BoardCard) {
+  return chart.id
+}
+
+function hasRenderableChart(chart: BoardCard) {
+  return !!(chart.data?.length && chart.pivot_config)
+}
 
 function handleDelete(id: number) {
   deleteId.value = id
   showDelete.value = true
 }
 
-function setRendererRef(id: number, instance: any) {
+function setRendererRef(id: string | number, instance: any) {
   if (
     instance &&
     typeof instance.openDataDialog === 'function' &&
@@ -120,15 +189,15 @@ function setRendererRef(id: number, instance: any) {
   rendererRefs.value[id] = null
 }
 
-function openChartData(id: number) {
+function openChartData(id: string | number) {
   rendererRefs.value[id]?.openDataDialog()
 }
 
-function toggleChartFullscreen(id: number) {
+function toggleChartFullscreen(id: string | number) {
   rendererRefs.value[id]?.toggleFullscreen()
 }
 
-function exportChartPng(id: number, title: string) {
+function exportChartPng(id: string | number, title: string) {
   void rendererRefs.value[id]?.exportPng(`${title || 'chart'}.png`)
 }
 
@@ -200,16 +269,33 @@ onMounted(async () => {
 }
 
 .chart-card {
+  position: relative;
   background: white;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  transition: box-shadow 0.2s;
+  transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
   min-width: 0;
+  border: 1px solid transparent;
 }
 
 .chart-card:hover {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.chart-card.is-selected {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.14), 0 18px 34px rgba(64, 158, 255, 0.22);
+  transform: translateY(-2px);
+}
+
+.chart-card.is-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.55);
 }
 
 .card-header {
@@ -226,9 +312,28 @@ onMounted(async () => {
   font-weight: 600;
   color: #303133;
   line-height: 1.5;
+}
+
+.card-title-wrap {
   flex: 1;
   min-width: 0;
-  word-break: break-word;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.selected-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .card-actions {
@@ -276,7 +381,35 @@ onMounted(async () => {
 
 .card-chart {
   padding: 12px;
-  height: 240px;
+  min-height: 240px;
+}
+
+.draft-placeholder {
+  min-height: 240px;
+  border: 1px dashed #d9e3f0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: #8a94a6;
+  padding: 20px;
+}
+
+.draft-placeholder strong {
+  font-size: 15px;
+  color: #606266;
+}
+
+.draft-placeholder span {
+  font-size: 12px;
+}
+
+.draft-placeholder-icon {
+  color: #93c5fd;
 }
 
 .card-footer {
