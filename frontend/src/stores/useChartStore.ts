@@ -4,6 +4,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { PivotConfig } from '@/types'
 
+export const MAX_BOARD_CHARTS = 6
+
 export interface SavedChart {
   id: number
   title: string
@@ -46,6 +48,14 @@ export const useChartStore = defineStore('charts', () => {
     loading.value = true
     error.value = null
     try {
+      const listResp = await fetch(API_BASE)
+      if (!listResp.ok) throw new Error('加载看板失败')
+      charts.value = await listResp.json()
+
+      if (charts.value.length >= MAX_BOARD_CHARTS) {
+        throw new Error(`看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
+      }
+
       const resp = await fetch(API_BASE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

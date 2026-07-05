@@ -6,8 +6,9 @@ import { ref } from 'vue'
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
-  charts?: Record<string, any>[] | null
-  suggestions?: string[]
+  data?: Record<string, any>[] | null
+  chart_type?: string
+  pivot_config?: Record<string, any> | null
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -33,9 +34,10 @@ export const useChatStore = defineStore('chat', () => {
       const resp_data = await resp.json()
       messages.value.push({
         role: 'assistant',
-        content: resp_data.reply || '已生成分析配置',
-        charts: resp_data.charts || null,
-        suggestions: resp_data.suggestions || [],
+        content: data.reply || '已生成分析配置',
+        data: data.data || null,
+        chart_type: data.chart_type || 'bar',
+        pivot_config: data.pivot_config || null,
       })
     } catch (e: any) {
       messages.value.push({
