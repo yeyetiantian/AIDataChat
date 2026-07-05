@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements-lock.txt
 
       - name: 设置 Node.js
         uses: actions/setup-node@v4
@@ -55,10 +55,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装 Python 依赖
-        run: |
-          pip install --prefer-binary fastapi uvicorn duckdb python-dotenv PyYAML
-          pip install --prefer-binary langchain-openai langgraph openai httpx tiktoken
-          pip install pyinstaller
+        run: pip install --no-deps -r backend/requirements-lock.txt
 
       - name: 执行打包
         env:
