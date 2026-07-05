@@ -55,7 +55,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装 Python 依赖
-        run: pip install -r backend/requirements.txt
+        run: |
+          pip install --prefer-binary fastapi uvicorn duckdb python-dotenv PyYAML
+          pip install --prefer-binary langchain-openai langgraph openai httpx tiktoken
+          pip install pyinstaller
 
       - name: 执行打包
         env:
