@@ -7,6 +7,10 @@
         <h1>柔性报表</h1>
       </div>
       <div class="header-right">
+        <router-link to="/set" class="top-create-button" title="新增">
+          <el-icon :size="16"><Plus /></el-icon>
+          <span>新增</span>
+        </router-link>
         <router-link to="/board" class="top-nav-item" active-class="nav-active" title="看板">
           <el-icon :size="18"><Collection /></el-icon>
           <span>看板</span>
@@ -27,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { Histogram, Collection } from '@element-plus/icons-vue'
+import { Histogram, Collection, Plus } from '@element-plus/icons-vue'
 </script>
 
 <style>
@@ -81,7 +85,27 @@ html, body, #app {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.top-create-button {
+  display: flex;
+  align-items: center;
   gap: 4px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  background: #409eff;
+  box-shadow: 0 6px 16px rgba(64, 158, 255, 0.2);
+  transition: all 0.2s;
+}
+
+.top-create-button:hover {
+  background: #337ecc;
+  color: #ffffff;
 }
 
 .top-nav-item {

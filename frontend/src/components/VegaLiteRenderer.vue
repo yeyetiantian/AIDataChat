@@ -7,7 +7,7 @@
 
     <template v-else>
       <!-- 工具栏 -->
-      <div class="chart-toolbar">
+      <div v-if="!props.hideToolbar" class="chart-toolbar">
         <span v-if="props.executionTimeMs != null" class="exec-time">
           耗时 {{ props.executionTimeMs }}ms
         </span>
@@ -56,12 +56,14 @@ const props = defineProps<{
   columns?: string[]
   sql?: string | null
   executionTimeMs?: number
+  hideToolbar?: boolean
 }>()
 
 const chartContainer = ref<HTMLElement | null>(null)
 const vegaContainer = ref<HTMLElement | null>(null)
 const showDataDialog = ref(false)
 const showSqlDialog = ref(false)
+const embedResult = ref<any>(null)
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -72,11 +74,6 @@ const displayColumns = computed(() => {
 
 /**
  * 根据 data / config / chartType 构建 Vega-Lite spec
- *
- * 两种数据模式：
- *   - 无 legend：轴(alias) × 值(field)，单列直接引用
- *   - 有 legend：PIVOT 展开，数据列名为 {legend_value}_{value_alias}，
- *                用 fold 变换将多列展开为 key-value 对
  */
 function buildVegaSpec(): Record<string, any> | null {
   const data = props.data
@@ -88,44 +85,9 @@ function buildVegaSpec(): Record<string, any> | null {
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
 
-  const xField = axes[0]?.alias || axes[0]?.field || ''
+  const xField = axes[0]?.alias || ''
   const xTitle = axes[0]?.alias || xField
-  const mark = { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' }
-
-  // —— 有 legend（PIVOT 模式）：数据列名是 {legend_value}_{value_alias} ——
-  if (legend.length) {
-    const legendName = legend[0]?.alias || legend[0]?.field || ''
-    // 已知列：轴列 + 图例原始字段 + 值字段
-    const knownCols = new Set([
-      xField,
-      legendName,
-      ...axes.map((a: any) => a.alias || a.field),
-      ...legend.map((l: any) => l.alias || l.field),
-    ])
-    // 数据中实际的值列 = 所有列 - 已知列
-    const valueCols = Object.keys(data[0]).filter(k => !knownCols.has(k))
-    if (!valueCols.length) return null
-
-    const encoding: any = {
-      x: { field: xField, type: 'nominal', title: xTitle },
-      y: { field: 'value', type: 'quantitative', title: values[0]?.alias || '数值' },
-      color: { field: 'key', type: 'nominal', title: legendName },
-    }
-
-    return {
-      $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
-      title: '数据分析',
-      width: 'container',
-      height: 'container',
-      data: { values: data },
-      transform: [{ fold: valueCols, as: ['key', 'value'] }],
-      mark,
-      encoding,
-    }
-  }
-
-  // —— 无 legend（简单 GROUP BY）：直接引用列名 ——
-  const yField = values[0]?.field || values[0]?.alias || ''
+  const yField = values[0]?.field || ''
   const yTitle = values[0]?.alias || yField
 
   const encoding: any = {}
@@ -135,6 +97,10 @@ function buildVegaSpec(): Record<string, any> | null {
   } else {
     if (xField) encoding.x = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.y = { field: yField, type: 'quantitative', title: yTitle }
+    if (legend.length) {
+      const lf = legend[0].field
+      encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
+    }
     if (chartType === 'line' && axes[0]?.group) {
       encoding.x.type = 'temporal'
     }
@@ -144,9 +110,9 @@ function buildVegaSpec(): Record<string, any> | null {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: 260,
+    height: 'container',
     data: { values: data },
-    mark,
+    mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
     encoding,
   }
 }
@@ -165,24 +131,37 @@ function toggleFullscreen() {
   }
 }
 
+function openDataDialog() {
+  showDataDialog.value = true
+}
+
+function openSqlDialog() {
+  if (props.sql) {
+    showSqlDialog.value = true
+  }
+}
+
 async function renderChart() {
   const spec = buildVegaSpec()
   if (!spec || !vegaContainer.value) return
 
   try {
     vegaContainer.value.innerHTML = ''
+    embedResult.value = null
 
     const plainSpec = JSON.parse(JSON.stringify(spec))
 
     console.log('Vega-Lite spec:', plainSpec)
 
-    await embed(vegaContainer.value, plainSpec, {
-      actions: {
-        export: { svg: true, png: true },
-        source: false,
-        compiled: false,
-        editor: false,
-      },
+    embedResult.value = await embed(vegaContainer.value, plainSpec, {
+      actions: props.hideToolbar
+        ? false
+        : {
+            export: { svg: true, png: true },
+            source: false,
+            compiled: false,
+            editor: false,
+          },
       tooltip: true,
     })
   } catch (e) {
@@ -190,20 +169,53 @@ async function renderChart() {
   }
 }
 
+function normalizeFileName(fileName: string) {
+  return (fileName || 'chart').replace(/[\\/:*?"<>|]/g, '-').trim() || 'chart'
+}
+
+function downloadUrl(url: string, fileName: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+async function exportPng(fileName = 'chart.png') {
+  const view = embedResult.value?.view
+  if (!view) return
+  const url = await view.toImageURL('png')
+  downloadUrl(url, normalizeFileName(fileName))
+}
+
+async function exportSvg(fileName = 'chart.svg') {
+  const view = embedResult.value?.view
+  if (!view) return
+  const svg = await view.toSVG()
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  downloadUrl(url, normalizeFileName(fileName))
+  URL.revokeObjectURL(url)
+}
+
 watch(
   () => props.data ? JSON.stringify(props.data) + '|' + JSON.stringify(props.config) + '|' + (props.chartType || '') : null,
   async () => {
     await nextTick()
     await renderChart()
-  }
+  },
+  { immediate: true }
 )
 
-onMounted(async () => {
-  await nextTick()
-  if (canRender.value) {
-    await renderChart()
-  }
+defineExpose({
+  openDataDialog,
+  openSqlDialog,
+  toggleFullscreen,
+  exportPng,
+  exportSvg,
 })
+
 </script>
 
 <style scoped>
@@ -216,7 +228,7 @@ onMounted(async () => {
   background: white;
   border-radius: 8px;
   padding: 0;
-  min-height: 300px;
+  min-height: 400px;
   overflow: hidden;
 }
 
@@ -259,6 +271,7 @@ onMounted(async () => {
   flex: 1;
   width: 100%;
   overflow: hidden;
+  min-height: 300px;
   padding: 0 16px 16px;
 }
 

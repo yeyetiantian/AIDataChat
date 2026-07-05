@@ -45,8 +45,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useChartStore } from '@/stores/useChartStore'
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
 import ConfigPanel from '@/components/ConfigPanel.vue'
 import VegaLiteRenderer from '@/components/VegaLiteRenderer.vue'
 import { PivotResponse } from '@/types'
@@ -60,10 +61,6 @@ const showSaveDialog = ref(false)
 const saveTitle = ref('')
 const saveDesc = ref('')
 const chartType = ref('bar')
-
-function onChartTypeChange(type: string) {
-  pivotConfig.value.chartType = type
-}
 
 async function pivotApi(config: any) {
   pivotConfig.value = config
@@ -90,7 +87,11 @@ async function pivotApi(config: any) {
 async function handleSave() {
   if (!saveTitle.value.trim()) return
   const config = pivotConfig.value || (chatResult.value ? Object.assign({ filters: [], axes: [], legend: [], values: [] }, chatResult.value.config) : {})
-  await chartStore.saveChart(saveTitle.value, config, saveDesc.value, chartType.value, chatResult.value?.data)
+  const saved = await chartStore.saveChart(saveTitle.value, config, saveDesc.value, chartType.value, chatResult.value?.data)
+  if (!saved) {
+    ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
+    return
+  }
   showSaveDialog.value = false
   saveTitle.value = ''
   saveDesc.value = ''

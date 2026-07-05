@@ -9,7 +9,6 @@ export interface ChatMessage {
   data?: Record<string, any>[] | null
   chart_type?: string
   pivot_config?: Record<string, any> | null
-  suggestions?: string[]
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -39,7 +38,6 @@ export const useChatStore = defineStore('chat', () => {
         data: data.data || null,
         chart_type: data.chart_type || 'bar',
         pivot_config: data.pivot_config || null,
-        suggestions: data.suggestions || [],
       })
     } catch (e: any) {
       messages.value.push({
