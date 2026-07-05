@@ -1,14 +1,7 @@
 """明细宽表构建模块（WIDE_DETAIL）
 
-用户设定的标准宽表结构：
-  固定 12 字段：人员(person)、车型(vehicle_type)、车辆(vehicle)、
-               任务(task)、规则名称(rule_name)、规则类型(rule_type)、
-               表达式(expression)、前置条件满足时间(condition_met_time)、
-               报警时间/前置条件不满足时间(alarm_time)、持续时间(duration_sec)、
-               报警/统计数据(alarm_value)、冻结帧(freeze_frame)
-  动态信号列：按 SIGNAL_NAME 出现频率 TOP-N 横向展开为独立列（来自实际数据）
-
-构建策略：用 get_conn()（已有源库连接）执行数据查询，用 get_wide_conn()（宽表库）写入。
+构建策略：直接连接源库（vcloud_duck.db）读取 6 张源表，
+        构建结果写入宽表库（vcloud_wide.db）。
 """
 
 from __future__ import annotations
@@ -20,45 +13,35 @@ import time
 import duckdb
 
 try:
-    from core.db_connector import get_conn, get_wide_db_path
+    from core.db_connector import get_wide_db_path
 except ImportError:
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from core.db_connector import get_conn, get_wide_db_path
+    from core.db_connector import get_wide_db_path
 
 logger = logging.getLogger("db_initializer")
 
 WIDE_DETAIL_TABLE = "WIDE_DETAIL"
 LOG_TABLE = "_wide_detail_build_log"
-TOP_SIGNALS_LIMIT = 200  # 默认 TOP-N 信号数
-_SRC_CONN = None  # 源库连接（CLI 模式自己打开）
+TOP_SIGNALS_LIMIT = 200
+
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _get_src_conn():
-    """获取源库连接
-
-    - API 模式（同进程）：复用 get_conn() 单例
-    - CLI 模式（独立进程）：自己打开 read-only 连接
-    """
-    global _SRC_CONN
-    if _SRC_CONN is not None:
-        return _SRC_CONN
-    # 先尝试复用服务端单例（API 模式）
-    try:
-        conn = get_conn()
-        # 随便查一下，确认连接可用
-        conn.execute("SELECT 1")
-        _SRC_CONN = conn
-        return _SRC_CONN
-    except Exception:
-        pass
-    # 服务端未运行或锁冲突 → 自己打开 read-only 连接
-    db_path = get_db_path()
-    _SRC_CONN = duckdb.connect(db_path, read_only=True)
-    _SRC_CONN.execute("SET threads TO 2;")
-    _SRC_CONN.execute("SET memory_limit = '6GB';")
-    _SRC_CONN.execute("SET preserve_insertion_order = false;")
-    return _SRC_CONN
+def _get_src_conn() -> duckdb.DuckDBPyConnection:
+    """直接连接源库（vcloud_duck.db）读取源表，构建用"""
+    candidates = [
+        os.path.abspath(os.path.join(_backend_dir, "../vcloud_duck1.db")),
+        os.path.abspath(os.path.join(_backend_dir, "../vcloud_duck.db")),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            conn = duckdb.connect(p, read_only=True)
+            conn.execute("SET threads TO 2;")
+            conn.execute("SET memory_limit = '6GB';")
+            conn.execute("SET preserve_insertion_order = false;")
+            return conn
+    raise FileNotFoundError(f"未找到源数据库（尝试: {candidates}）")
 
 # ============================================================
 # 固定 12 字段定义

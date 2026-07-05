@@ -20,6 +20,18 @@
 
       <!-- 图表容器 -->
       <div ref="vegaContainer" class="vega-container"></div>
+
+      <!-- 建议标签 -->
+      <div v-if="suggestions.length" class="chart-suggestions">
+        <el-tag
+          v-for="s in suggestions" :key="s"
+          size="small"
+          class="suggest-tag"
+          @click="$emit('suggest', s)"
+        >
+          {{ s }}
+        </el-tag>
+      </div>
     </template>
 
     <!-- SQL 弹窗 -->
@@ -58,6 +70,10 @@ const props = defineProps<{
   executionTimeMs?: number
 }>()
 
+const emit = defineEmits<{
+  suggest: [text: string]
+}>()
+
 const chartContainer = ref<HTMLElement | null>(null)
 const vegaContainer = ref<HTMLElement | null>(null)
 const showDataDialog = ref(false)
@@ -72,6 +88,11 @@ const displayColumns = computed(() => {
 
 /**
  * 根据 data / config / chartType 构建 Vega-Lite spec
+ *
+ * 两种数据模式：
+ *   - 无 legend：轴(alias) × 值(field)，单列直接引用
+ *   - 有 legend：PIVOT 展开，数据列名为 {legend_value}_{value_alias}，
+ *                用 fold 变换将多列展开为 key-value 对
  */
 function buildVegaSpec(): Record<string, any> | null {
   const data = props.data
@@ -83,9 +104,44 @@ function buildVegaSpec(): Record<string, any> | null {
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
 
-  const xField = axes[0]?.alias || ''
+  const xField = axes[0]?.alias || axes[0]?.field || ''
   const xTitle = axes[0]?.alias || xField
-  const yField = values[0]?.field || ''
+  const mark = { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' }
+
+  // —— 有 legend（PIVOT 模式）：数据列名是 {legend_value}_{value_alias} ——
+  if (legend.length) {
+    const legendName = legend[0]?.alias || legend[0]?.field || ''
+    // 已知列：轴列 + 图例原始字段 + 值字段
+    const knownCols = new Set([
+      xField,
+      legendName,
+      ...axes.map((a: any) => a.alias || a.field),
+      ...legend.map((l: any) => l.alias || l.field),
+    ])
+    // 数据中实际的值列 = 所有列 - 已知列
+    const valueCols = Object.keys(data[0]).filter(k => !knownCols.has(k))
+    if (!valueCols.length) return null
+
+    const encoding: any = {
+      x: { field: xField, type: 'nominal', title: xTitle },
+      y: { field: 'value', type: 'quantitative', title: values[0]?.alias || '数值' },
+      color: { field: 'key', type: 'nominal', title: legendName },
+    }
+
+    return {
+      $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+      title: '数据分析',
+      width: 'container',
+      height: 'container',
+      data: { values: data },
+      transform: [{ fold: valueCols, as: ['key', 'value'] }],
+      mark,
+      encoding,
+    }
+  }
+
+  // —— 无 legend（简单 GROUP BY）：直接引用列名 ——
+  const yField = values[0]?.field || values[0]?.alias || ''
   const yTitle = values[0]?.alias || yField
 
   const encoding: any = {}
@@ -95,10 +151,6 @@ function buildVegaSpec(): Record<string, any> | null {
   } else {
     if (xField) encoding.x = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.y = { field: yField, type: 'quantitative', title: yTitle }
-    if (legend.length) {
-      const lf = legend[0].field
-      encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
-    }
     if (chartType === 'line' && axes[0]?.group) {
       encoding.x.type = 'temporal'
     }
@@ -108,15 +160,52 @@ function buildVegaSpec(): Record<string, any> | null {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: 'container',
+    height: 260,
     data: { values: data },
-    mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
+    mark,
     encoding,
   }
 }
 
 const canRender = computed(() => {
   return props.data && props.data.length > 0 && props.config
+})
+
+// 根据当前图表生成 3 个相关建议
+const suggestions = computed(() => {
+  const result: string[] = []
+  const config = props.config
+  const axes = config?.axes || []
+  const legend = config?.legend || []
+  const values = config?.values || []
+  if (!axes.length || !values.length) return result
+
+  const chartType = props.chartType || 'bar'
+  const xField = axes[0]?.alias || axes[0]?.field || ''
+  const xTitle = axes[0]?.alias || xField
+
+  // 1. 筛选第一个数据值（如果有有效数据）
+  if (props.data?.length && xField) {
+    const firstVal = props.data[0][xField]
+    if (firstVal) {
+      result.push(`只看"${firstVal}"的数据`)
+    }
+  }
+
+  // 2. 切换图表类型
+  const nextType: Record<string, string> = { bar: 'line', line: 'pie', pie: 'area', area: 'bar', point: 'line', radar: 'bar' }
+  const typeName: Record<string, string> = { bar: '柱状图', line: '折线图', pie: '饼状图', area: '波形图', point: '散点图', radar: '雷达图' }
+  const nt = nextType[chartType] || 'bar'
+  result.push(`改成${typeName[nt] || nt}`)
+
+  // 3. 按时间趋势 / 规则类型分组
+  if (!legend.length) {
+    result.push(`按时间趋势查看`)
+  } else {
+    result.push(`只看${values[0]?.alias || '数值'}最高的`)
+  }
+
+  return result
 })
 
 function toggleFullscreen() {
@@ -159,10 +248,15 @@ watch(
   async () => {
     await nextTick()
     await renderChart()
-  },
-  { immediate: true }
+  }
 )
 
+onMounted(async () => {
+  await nextTick()
+  if (canRender.value) {
+    await renderChart()
+  }
+})
 </script>
 
 <style scoped>
@@ -175,7 +269,7 @@ watch(
   background: white;
   border-radius: 8px;
   padding: 0;
-  min-height: 400px;
+  min-height: 300px;
   overflow: hidden;
 }
 
@@ -218,7 +312,6 @@ watch(
   flex: 1;
   width: 100%;
   overflow: hidden;
-  min-height: 300px;
   padding: 0 16px 16px;
 }
 
@@ -231,5 +324,30 @@ watch(
   overflow: auto;
   max-height: 320px;
   line-height: 1.55;
+}
+
+.chart-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 16px 12px;
+  width: 100%;
+  justify-content: center;
+}
+
+.suggest-tag {
+  cursor: pointer;
+  border-color: #f5d0d0 !important;
+  color: #d93a3a !important;
+  background: #fff5f5 !important;
+  font-size: 12px;
+  border-radius: 12px;
+  padding: 0 10px;
+  transition: all 0.2s;
+}
+.suggest-tag:hover {
+  background: #d93a3a !important;
+  color: #fff !important;
+  border-color: #d93a3a !important;
 }
 </style>

@@ -491,7 +491,7 @@ class PivotSQLBuilder:
 
         # ---------- 构造查询 ----------
         # 先用 EXISTS 判断 WIDE_DETAIL 表是否可访问
-        sql = f"SELECT\n    {cols_sql}\nFROM wide_db.WIDE_DETAIL"
+        sql = f"SELECT\n    {cols_sql}\nFROM WIDE_DETAIL"
 
         # 在外层加上 filters
         where = _build_where_clause(self.filters)
@@ -871,8 +871,8 @@ def build_vega_spec(config: PivotConfig) -> dict[str, Any]:
 
     # Y 轴 + 多值处理
     if has_multi_values:
-        # 多个值 → 用 fold 变换实现多系列
-        val_names = [v.get("alias") or v.get("id") for v in values]
+        # 多个值 → 用 fold 变换实现多系列（列名为 field，与 SQL 输出对齐）
+        val_names = [v.get("field") or v.get("alias") or v.get("id") for v in values]
         encoding["y"] = {"field": "value", "type": "quantitative", "title": "数值"}
         encoding["color"] = {
             "field": "key", "type": "nominal", "title": "指标",
@@ -889,7 +889,7 @@ def build_vega_spec(config: PivotConfig) -> dict[str, Any]:
     else:
         # 单值
         first_val = values[0] if values else {}
-        val_name = first_val.get("alias") or first_val.get("id", "count")
+        val_name = first_val.get("field") or first_val.get("alias") or first_val.get("id", "count")
         if legend:
             # 有图例 → 堆叠/分组条形图
             legend_field = legend[0]

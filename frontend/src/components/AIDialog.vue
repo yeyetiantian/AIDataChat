@@ -1,12 +1,7 @@
 <template>
   <div class="ai-dialog">
-    <div class="dialog-header">
-      <h3>AI 对话分析</h3>
-      <el-button size="small" text @click="chatStore.clearMessages()">清空对话</el-button>
-    </div>
-
     <div class="dialog-messages" ref="messagesRef">
-      <div v-if="messages.length === 0" class="empty-state">
+      <div v-if="chatStore.messages.length === 0" class="empty-state">
         <el-icon :size="48" color="#c0c4cc"><ChatLineSquare /></el-icon>
         <p>输入分析需求，AI 将自动生成图表</p>
         <div class="suggestions">
@@ -21,13 +16,13 @@
         </div>
       </div>
 
-      <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
+      <div v-for="(msg, i) in chatStore.messages" :key="i" class="message" :class="msg.role">
         <div class="message-content">
           <div class="message-text">{{ msg.content }}</div>
 
           <!-- 图表显示 -->
           <div v-if="msg.data && msg.data.length" class="message-chart">
-            <VegaLiteRenderer :data="msg.data" :config="msg.pivot_config" :chart-type="msg.chart_type || 'bar'" />
+            <VegaLiteRenderer :data="msg.data" :config="msg.pivot_config" :chart-type="msg.chart_type || 'bar'" @suggest="onSuggest" />
             <div class="chart-actions">
               <el-button size="small" type="primary" @click="saveToBoard(msg)">保存到看板</el-button>
             </div>
@@ -76,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import { ChatLineSquare, Promotion } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 import { useChatStore, type ChatMessage } from '@/stores/useChatStore'
@@ -85,9 +80,6 @@ import type { PivotConfig } from '@/types'
 
 const chatStore = useChatStore()
 const chartStore = useChartStore()
-
-// 模板中可以直接使用 messages（Pinia 的 setup store 属性在模板中自动解包有类型问题，用 computed 桥接）
-const messages = computed(() => chatStore.messages)
 
 const emit = defineEmits<{
   save: [chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>]
@@ -112,6 +104,10 @@ function handleSend() {
   if (!msg || chatStore.loading) return
   input.value = ''
   chatStore.sendMessage(msg)
+}
+
+function onSuggest(text: string) {
+  chatStore.sendMessage(text)
 }
 
 function saveToBoard(msg: ChatMessage) {
@@ -153,8 +149,8 @@ watch(() => chatStore.messages.length, async () => {
 .ai-dialog {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  background: white;
+  height: 80vh;
+  background: #ffffff;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -175,6 +171,7 @@ watch(() => chatStore.messages.length, async () => {
 
 .dialog-messages {
   flex: 1;
+  max-height: 74vh;
   overflow-y: auto;
   padding: 16px;
 }
@@ -204,6 +201,14 @@ watch(() => chatStore.messages.length, async () => {
 
 .suggestion-tag {
   cursor: pointer;
+  border-color: #f5d0d0 !important;
+  color: #d93a3a !important;
+  background: #fff5f5 !important;
+}
+.suggestion-tag:hover {
+  background: #d93a3a !important;
+  color: #fff !important;
+  border-color: #d93a3a !important;
 }
 
 .message {
@@ -220,7 +225,7 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .message-content {
-  max-width: 85%;
+  max-width: 90%;
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 14px;
@@ -228,8 +233,8 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .message.user .message-content {
-  background: #409eff;
-  color: white;
+  background: #d93a3a;
+  color: #fff;
   border-radius: 12px 4px 12px 12px;
 }
 
@@ -245,6 +250,7 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .message-chart {
+  width: 420px;
   margin-top: 12px;
   border: 1px solid #ebeef5;
   border-radius: 8px;
