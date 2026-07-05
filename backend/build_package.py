@@ -89,10 +89,10 @@ HIDDEN_IMPORTS = [
 def build_frontend() -> None:
     """构建前端并复制到 backend/dist"""
     print("[build] >>> 构建前端...")
-    subprocess.run(["npm", "install", "--no-audit", "--no-fund"],
-                   cwd=FRONTEND_DIR, check=True)
-    subprocess.run(["npm", "run", "build"],
-                   cwd=FRONTEND_DIR, check=True)
+    _npm = ["npm", "install", "--no-audit", "--no-fund"]
+    subprocess.run(_npm, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
+    _build = ["npm", "run", "build"]
+    subprocess.run(_build, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
 
     if not FRONTEND_DIST.is_dir():
         print("[build] 错误: 前端构建失败，未生成 dist 目录")
@@ -106,6 +106,27 @@ def build_frontend() -> None:
     print(f"[build] 前端构建完成: {target} ({sum(f.stat().st_size for f in target.rglob('*')) / 1024:.0f} KB)")
 
 
+def _ensure_data_dir() -> None:
+    """确保 data/ 目录存在，创建默认数据文件（data/ 在 .gitignore 中）"""
+    data_dir = BACKEND_DIR / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # charts.json：看板数据存储
+    charts_file = data_dir / "charts.json"
+    if not charts_file.exists():
+        charts_file.write_text("[]", encoding="utf-8")
+        print(f"[build] 创建默认 {charts_file}")
+
+    # wide_fields.json：字段注册表缓存
+    fields_file = data_dir / "wide_fields.json"
+    if not fields_file.exists():
+        import json as _json
+        from core.field_registry import WIDE_DETAIL_FIXED_FIELDS
+        default_fields = [f.model_dump() for f in WIDE_DETAIL_FIXED_FIELDS]
+        fields_file.write_text(_json.dumps(default_fields, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[build] 创建默认 {fields_file}（12 个固定字段）")
+
+
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包"""
     print("[build] >>> 执行 PyInstaller 打包...")
@@ -114,6 +135,8 @@ def run_pyinstaller() -> None:
         shutil.rmtree(OUTPUT_DIR)
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
+
+    _ensure_data_dir()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -146,12 +169,37 @@ def run_pyinstaller() -> None:
     cmd.append(str(BACKEND_DIR / "run.py"))
 
     print(f"[build] PyInstaller 命令: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=BACKEND_DIR, check=True)
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("[build] ❌ PyInstaller 失败，stderr:")
+        print(result.stderr[-3000:] if result.stderr else "(无 stderr)")
+        print("[build] ❌ 最后 30 行 stdout:")
+        lines = (result.stdout or "").splitlines()
+        print("\n".join(lines[-30:]))
+        result.check_returncode()
+
+    # 将 data/ 和 dist/ 复制到可执行文件同级（不在 _internal 内）
+    _copy_to_output("data")
+    _copy_to_output("dist")
+
     print(f"[build] PyInstaller 打包完成")
 
 
+def _copy_to_output(dir_name: str) -> None:
+    """将目录从 backend/ 复制到 PyInstaller 输出目录（可执行文件同级）"""
+    src = BACKEND_DIR / dir_name
+    if not src.is_dir():
+        print(f"[build] 跳过 {dir_name}：源目录不存在")
+        return
+    out_dir = OUTPUT_DIR / "AIDataChat" / dir_name
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    shutil.copytree(src, out_dir)
+    print(f"[build] 复制 {dir_name} → {out_dir}")
+
+
 def create_archive() -> str:
-    """创建发布压缩包"""
+    """创建发布压缩包（扁平结构：data/、dist/、_internal/ 与可执行文件同级）"""
     platform_tag = {
         "win32": "windows",
         "darwin": "macos",
@@ -165,7 +213,6 @@ def create_archive() -> str:
 
     dist_dir = OUTPUT_DIR / "AIDataChat"
     if not dist_dir.exists():
-        # 尝试找其他目录
         for d in OUTPUT_DIR.iterdir():
             if d.is_dir():
                 dist_dir = d
@@ -173,18 +220,23 @@ def create_archive() -> str:
 
     version = os.getenv("RELEASE_VERSION", "1.0.0")
     archive_name = f"AIDataChat-{version}-{platform_tag}-{arch}"
+    prefix = f"{archive_name}/"
+
+    def _entries():
+        for f in dist_dir.rglob("*"):
+            yield f, f"{prefix}{f.relative_to(dist_dir)}"
 
     if sys.platform == "win32":
         archive_path = OUTPUT_DIR / f"{archive_name}.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in dist_dir.rglob("*"):
-                zf.write(f, f"{archive_name}/{f.relative_to(dist_dir.parent)}")
+            for src, dst in _entries():
+                zf.write(src, dst)
     else:
         archive_path = OUTPUT_DIR / f"{archive_name}.tar.gz"
         import tarfile
         with tarfile.open(archive_path, "w:gz") as tf:
-            for f in dist_dir.rglob("*"):
-                tf.add(f, f"{archive_name}/{f.relative_to(dist_dir.parent)}")
+            for src, dst in _entries():
+                tf.add(src, dst)
 
     print(f"[build] 压缩包: {archive_path}")
     return str(archive_path)

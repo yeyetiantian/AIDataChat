@@ -73,12 +73,15 @@ export const useChartStore = defineStore('charts', () => {
   }
 
   async function deleteChart(id: number) {
+    error.value = null
     try {
       const resp = await fetch(`${API_BASE}/${id}`, { method: 'DELETE' })
       if (!resp.ok) throw new Error('删除失败')
       charts.value = charts.value.filter(c => c.id !== id)
+      return true
     } catch (e: any) {
       error.value = e.message
+      return false
     }
   }
 

@@ -3,7 +3,7 @@
     <!-- 字段列表（固定字段 + 信号字段并排，不收拢） -->
     <div class="panel-section">
       <div class="section-header">
-        <span class="section-title">透视表配置</span>
+        <span class="section-title">报表配置</span>
       </div>
       <div class="section-body">
         <div class="field-search">
@@ -313,7 +313,7 @@
 
         <!-- 操作按钮（在最下边） -->
         <div class="zone-actions">
-          <el-button size="small" type="primary" :loading="loading" @click="handleQuery">查询</el-button>
+          <el-button size="small" type="primary" :loading="loading" @click="handleQuery">加载报表数据</el-button>
           <el-button size="small" @click="handleClear">清空</el-button>
         </div>
       </div>

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -176,6 +177,14 @@ def _to_dict(obj: Any) -> dict[str, Any]:
     return dict(obj)
 
 
+def _sql_quote(value: str) -> str:
+    """安全引用 SQL 字符串值（转义单引号，检测表达式不引）"""
+    # 检测 SQL 表达式：函数调用、关键字、运算符号
+    if re.search(r"\w+\s*\(", value) or re.search(r"\b(INTERVAL|SELECT|CASE|NOW|DATE_TRUNC|EXTRACT)\b", value, re.IGNORECASE):
+        return value
+    return f"'{value.replace(chr(39), chr(39)+chr(39))}'"
+
+
 def _build_where_clause(filters: list[Any]) -> str:
     """构建 WHERE 子句"""
     if not filters:
@@ -193,11 +202,11 @@ def _build_where_clause(filters: list[Any]) -> str:
         if op == "between":
             vals = value if isinstance(value, (list, tuple)) else []
             if len(vals) >= 2:
-                clauses.append(f'"{field}" BETWEEN \'{vals[0]}\' AND \'{vals[1]}\'')
+                clauses.append(f'"{field}" BETWEEN {_sql_quote(str(vals[0]))} AND {_sql_quote(str(vals[1]))}')
             continue
         if op == "in":
             vals = value if isinstance(value, (list, tuple)) else [value]
-            formatted = ", ".join(f"'{v}'" for v in vals)
+            formatted = ", ".join(_sql_quote(str(v)) for v in vals)
             clauses.append(f'"{field}" IN ({formatted})')
             continue
         if op in ("contains", "like"):
@@ -210,7 +219,7 @@ def _build_where_clause(filters: list[Any]) -> str:
             clauses.append(f'"{field}" LIKE \'%{value}\'')
             continue
         if isinstance(value, str):
-            clauses.append(f'"{field}" {OP_MAP[op]} \'{value}\'')
+            clauses.append(f'"{field}" {OP_MAP[op]} {_sql_quote(value)}')
         else:
             clauses.append(f'"{field}" {OP_MAP[op]} {value}')
     return " AND ".join(clauses) if clauses else ""
@@ -311,6 +320,8 @@ class PivotSQLBuilder:
         self.order_by: list[dict] = cfg.get("order_by", [])
         self.pagination: dict | None = cfg.get("pagination")
         self._dynamic_columns: list[str] = []
+        # PIVOT 模式下 value id → 实际列名的映射（构建 PIVOT 时填充）
+        self._pivot_value_col_map: dict[str, str] = {}
 
         # =============== 宽表模式 (明细宽表) 判定 ===============
         from core.field_registry import (
@@ -617,6 +628,10 @@ class PivotSQLBuilder:
                 else:
                     agg_inner = f'{agg}(CASE WHEN {cond} THEN {col_ref} END)'
                 pivot_cols.append(f'{agg_inner} AS "{pivot_col_name}"')
+            # 记录第一个图例组合的列名，供 ORDER BY 使用
+            vid = vdef.get("id")
+            if vid and vid not in self._pivot_value_col_map:
+                self._pivot_value_col_map[vid] = pivot_col_name
 
         if axis_select:
             select_sql = ", ".join(axis_select + pivot_cols)
@@ -787,11 +802,15 @@ class PivotSQLBuilder:
         clauses: list[str] = []
         for ob in self.order_by:
             field = ob["field"]
-            # 如果 field 是 value 的 id（如 "val_1"），解析为实际 SQL 列名
-            for v in self.values:
-                if v.get("id") == field:
-                    field = v.get("field") or v.get("alias") or field
-                    break
+            # PIVOT 模式：优先使用 _pivot_value_col_map
+            if field in self._pivot_value_col_map:
+                field = self._pivot_value_col_map[field]
+            else:
+                # 非 PIVOT 模式：如果 field 是 value 的 id（如 "val_1"），解析为实际 SQL 列名
+                for v in self.values:
+                    if v.get("id") == field:
+                        field = v.get("field") or v.get("alias") or field
+                        break
             clauses.append(f'"{field}" {ob.get("direction", "desc")}')
         return f"\nORDER BY {', '.join(clauses)}"
 
