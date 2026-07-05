@@ -42,7 +42,12 @@
               <div v-for="(item, i) in filters" :key="i" class="zone-item">
                 <span class="zone-item-field">{{ item.field }}</span>
                 <template v-if="isTimeFilterField(item.field)">
-                  <el-select v-model="item.op" size="small" style="width:70px" @change="handleTimeFilterOpChange(item)">
+                  <el-select
+                    :model-value="item.op"
+                    size="small"
+                    style="width:70px"
+                    @update:model-value="(op) => onTimeFilterOpChange(item, op)"
+                  >
                     <el-option label="=" value="=" /><el-option label="!=" value="!=" />
                     <el-option label=">" value=">" /><el-option label=">=" value=">=" />
                     <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
@@ -57,7 +62,7 @@
                     class="filter-date-picker"
                     placeholder="选择日期时间"
                   />
-                  <div v-else class="between-inputs">
+                  <div v-else-if="Array.isArray(item.value)" class="between-inputs">
                     <el-date-picker
                       v-model="item.value[0]"
                       type="datetime"
@@ -75,6 +80,78 @@
                       class="filter-date-picker-sm"
                       placeholder="结束"
                     />
+                  </div>
+                </template>
+                <template v-else-if="isNumericFilterField(item.field)">
+                  <el-select
+                    :model-value="item.op"
+                    size="small"
+                    style="width:70px"
+                    @update:model-value="(op) => onNumericFilterOpChange(item, op)"
+                  >
+                    <el-option label="=" value="=" /><el-option label="!=" value="!=" />
+                    <el-option label=">" value=">" /><el-option label=">=" value=">=" />
+                    <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
+                    <el-option label="between" value="between" />
+                  </el-select>
+                  <el-input-number
+                    v-if="item.op !== 'between'"
+                    v-model="item.value"
+                    :precision="1"
+                    :step="0.1"
+                    size="small"
+                    class="filter-number-input"
+                    controls-position="right"
+                    :controls="false"
+                    placeholder="值"
+                  />
+                  <div v-else-if="Array.isArray(item.value)" class="between-inputs">
+                    <el-input-number
+                      v-model="item.value[0]"
+                      :precision="1"
+                      :step="0.1"
+                      size="small"
+                      class="filter-number-input-sm"
+                      :controls="false"
+                      controls-position="right"
+                      placeholder="最小"
+                    />
+                    <span>~</span>
+                    <el-input-number
+                      v-model="item.value[1]"
+                      :precision="1"
+                      :controls="false"
+                      :step="0.1"
+                      size="small"
+                      class="filter-number-input-sm"
+                      controls-position="right"
+                      placeholder="最大"
+                    />
+                  </div>
+                </template>
+                <template v-else-if="isStringFilterField(item.field)">
+                  <el-select
+                    :model-value="item.op"
+                    size="small"
+                    style="width:70px"
+                    @update:model-value="(op) => onStringFilterOpChange(item, op)"
+                  >
+                    <el-option label="=" value="=" /><el-option label="!=" value="!=" />
+                    <el-option label=">" value=">" /><el-option label=">=" value=">=" />
+                    <el-option label="&lt;" value="<" /><el-option label="&lt;=" value="<=" />
+                    <el-option label="between" value="between" />
+                  </el-select>
+                  <el-input
+                    v-if="item.op !== 'between'"
+                    v-model="item.value"
+                    size="small"
+                    class="filter-text-input"
+                    placeholder="值"
+                  />
+                  <div v-else-if="Array.isArray(item.value)" class="between-inputs">
+                    <el-input v-model="item.value[0]" size="small" class="filter-text-input-sm" placeholder="开始" />
+                    <span>~</span>
+                    <el-input v-model="item.value[1]" size="small" class="filter-text-input-sm" placeholder="结束" />
                   </div>
                 </template>
                 <template v-else>
@@ -229,7 +306,7 @@
 import { ref, reactive, computed, toRef, onMounted } from 'vue'
 import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document } from '@element-plus/icons-vue'
 import type { FieldDef, ZoneType, FilterItem, AxisItem, LegendItem, ValueItem } from '@/types'
-import { TIME_FILTER_FIELDS, STATIC_DROPDOWN_DATA } from '@/constants/filterDropdown'
+import { TIME_FILTER_FIELDS, NUMERIC_FILTER_FIELDS, STRING_FILTER_FIELDS, STATIC_DROPDOWN_DATA } from '@/constants/filterDropdown'
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
 
@@ -315,6 +392,18 @@ function isTimeFilterField(field: string): boolean {
   return (TIME_FILTER_FIELDS as readonly string[]).includes(field)
 }
 
+function isNumericFilterField(field: string): boolean {
+  return (NUMERIC_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isStringFilterField(field: string): boolean {
+  return (STRING_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isDropdownFilterField(field: string): boolean {
+  return !isTimeFilterField(field) && !isNumericFilterField(field) && !isStringFilterField(field)
+}
+
 function isResultViewField(field: string): boolean {
   return (RESULT_VIEW_FIELDS as readonly string[]).includes(field)
 }
@@ -368,18 +457,48 @@ function onFilterMultiChange(item: FilterItem, val: string[]) {
   }
 }
 
+function formatNumericValue(val: unknown): string {
+  if (val == null || val === '') return ''
+  const num = Number(val)
+  return Number.isNaN(num) ? '' : num.toFixed(1)
+}
+
+function parseNumericValue(val: unknown): number | null {
+  if (val == null || val === '') return null
+  const num = Number(val)
+  return Number.isNaN(num) ? null : num
+}
+
+function normalizeRangeFilterValue(item: FilterItem): FilterItem {
+  if (item.op === 'between') {
+    const v = item.value
+    if (Array.isArray(v)) return { ...item, value: [v[0] ?? '', v[1] ?? ''] }
+    if (typeof v === 'string' && v.includes(',')) {
+      const [a, b] = v.split(',')
+      return { ...item, value: [a ?? '', b ?? ''] }
+    }
+    return { ...item, value: ['', ''] }
+  }
+  return { ...item, value: typeof item.value === 'string' ? item.value : '' }
+}
+
 function normalizeFilterForUI(item: FilterItem): FilterItem {
-  if (isTimeFilterField(item.field)) {
+  if (isTimeFilterField(item.field) || isStringFilterField(item.field)) {
+    return normalizeRangeFilterValue(item)
+  }
+  if (isNumericFilterField(item.field)) {
     if (item.op === 'between') {
       const v = item.value
-      if (Array.isArray(v)) return { ...item, value: [v[0] ?? '', v[1] ?? ''] }
+      if (Array.isArray(v)) {
+        return { ...item, value: [parseNumericValue(v[0]), parseNumericValue(v[1])] }
+      }
       if (typeof v === 'string' && v.includes(',')) {
         const [a, b] = v.split(',')
-        return { ...item, value: [a ?? '', b ?? ''] }
+        return { ...item, value: [parseNumericValue(a), parseNumericValue(b)] }
       }
-      return { ...item, value: ['', ''] }
+      return { ...item, value: [null, null] }
     }
-    return { ...item, value: typeof item.value === 'string' ? item.value : '' }
+    return { ...item, value: parseNumericValue(item.value) }
   }
   const op = item.op === '=' ? 'in' : (item.op || 'in')
   let values: string[]
@@ -395,11 +514,17 @@ function normalizeFilterForUI(item: FilterItem): FilterItem {
 }
 
 function serializeFilterForApi(item: FilterItem): FilterItem {
-  if (isTimeFilterField(item.field)) {
+  if (isTimeFilterField(item.field) || isStringFilterField(item.field)) {
     if (item.op === 'between' && Array.isArray(item.value)) {
       return { field: item.field, op: item.op, value: item.value.join(',') }
     }
     return { field: item.field, op: item.op, value: item.value }
+  }
+  if (isNumericFilterField(item.field)) {
+    if (item.op === 'between' && Array.isArray(item.value)) {
+      return { field: item.field, op: item.op, value: item.value.map(formatNumericValue).join(',') }
+    }
+    return { field: item.field, op: item.op, value: formatNumericValue(item.value) }
   }
   const arr = Array.isArray(item.value) ? item.value : [item.value]
   if (arr.length === 0 || (arr.length === 1 && arr[0] === '')) {
@@ -408,7 +533,7 @@ function serializeFilterForApi(item: FilterItem): FilterItem {
   return { field: item.field, op: 'in', value: arr.filter(v => v !== '').join(',') }
 }
 
-function onTimeFilterOpChange(item: FilterItem, op: string | number) {
+function onRangeFilterOpChange(item: FilterItem, op: string | number) {
   const opStr = String(op)
   if (opStr === 'between') {
     const v = item.value
@@ -416,10 +541,26 @@ function onTimeFilterOpChange(item: FilterItem, op: string | number) {
   } else if (Array.isArray(item.value)) {
     item.value = item.value[0] ?? ''
   }
+  item.op = opStr
 }
 
-function handleTimeFilterOpChange(item: FilterItem) {
-  return (op: string | number) => onTimeFilterOpChange(item, op)
+function onStringFilterOpChange(item: FilterItem, op: string | number) {
+  onRangeFilterOpChange(item, op)
+}
+
+function onNumericFilterOpChange(item: FilterItem, op: string | number) {
+  const opStr = String(op)
+  if (opStr === 'between') {
+    const v = item.value
+    item.value = Array.isArray(v) ? [parseNumericValue(v[0]), parseNumericValue(v[1])] : [parseNumericValue(v), null]
+  } else if (Array.isArray(item.value)) {
+    item.value = parseNumericValue(item.value[0])
+  }
+  item.op = opStr
+}
+
+function onTimeFilterOpChange(item: FilterItem, op: string | number) {
+  onRangeFilterOpChange(item, op)
 }
 
 function addHaving() {
@@ -450,11 +591,18 @@ function onDrop(event: DragEvent, zone: ZoneType) {
   const item = { field: field.name, alias: field.alias_cn }
   if (zone === 'filters') {
     const isTime = isTimeFilterField(field.name)
-    const newFilter: FilterItem = isTime
-      ? { field: field.name, op: '=', value: '' }
-      : { field: field.name, op: 'in', value: [''] }
+    const isNumeric = isNumericFilterField(field.name)
+    const isString = isStringFilterField(field.name)
+    let newFilter: FilterItem
+    if (isTime || isString) {
+      newFilter = { field: field.name, op: '=', value: '' }
+    } else if (isNumeric) {
+      newFilter = { field: field.name, op: '=', value: null }
+    } else {
+      newFilter = { field: field.name, op: 'in', value: [''] }
+      loadFilterDropdown(field.name)
+    }
     stateData.filters.push(newFilter)
-    if (!isTime) loadFilterDropdown(field.name)
   } else if (zone === 'axes') {
     stateData.axes.push({ field: field.name, alias: field.alias_cn, sort: 'asc' })
   } else if (zone === 'legend') {
@@ -521,7 +669,7 @@ defineExpose({
     if (config.filters) {
       stateData.filters = config.filters.map(normalizeFilterForUI)
       config.filters.forEach(f => {
-        if (!isTimeFilterField(f.field)) loadFilterDropdown(f.field)
+        if (isDropdownFilterField(f.field)) loadFilterDropdown(f.field)
       })
     }
     if (config.axes) stateData.axes = config.axes
@@ -765,6 +913,26 @@ onMounted(async () => {
 }
 
 .filter-date-picker-sm {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-number-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-number-input-sm {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-text-input-sm {
   flex: 1;
   min-width: 0;
 }
