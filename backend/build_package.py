@@ -106,6 +106,27 @@ def build_frontend() -> None:
     print(f"[build] 前端构建完成: {target} ({sum(f.stat().st_size for f in target.rglob('*')) / 1024:.0f} KB)")
 
 
+def _ensure_data_dir() -> None:
+    """确保 data/ 目录存在，创建默认数据文件（data/ 在 .gitignore 中）"""
+    data_dir = BACKEND_DIR / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # charts.json：看板数据存储
+    charts_file = data_dir / "charts.json"
+    if not charts_file.exists():
+        charts_file.write_text("[]", encoding="utf-8")
+        print(f"[build] 创建默认 {charts_file}")
+
+    # wide_fields.json：字段注册表缓存
+    fields_file = data_dir / "wide_fields.json"
+    if not fields_file.exists():
+        import json as _json
+        from core.field_registry import WIDE_DETAIL_FIXED_FIELDS
+        default_fields = [f.model_dump() for f in WIDE_DETAIL_FIXED_FIELDS]
+        fields_file.write_text(_json.dumps(default_fields, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[build] 创建默认 {fields_file}（12 个固定字段）")
+
+
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包"""
     print("[build] >>> 执行 PyInstaller 打包...")
@@ -114,6 +135,8 @@ def run_pyinstaller() -> None:
         shutil.rmtree(OUTPUT_DIR)
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
+
+    _ensure_data_dir()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
