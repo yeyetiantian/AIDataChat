@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
 
@@ -72,6 +72,151 @@ const displayColumns = computed(() => {
   return []
 })
 
+function buildRadarSpec(
+  data: Record<string, any>[],
+  axisField: string,
+  axisTitle: string,
+  values: Array<Record<string, any>>,
+) {
+  const dimensions = data
+    .map(row => String(row[axisField] ?? ''))
+    .filter(Boolean)
+
+  if (!dimensions.length || values.length < 2) return null
+
+  const maxValue = Math.max(
+    ...data.flatMap(row => values.map(value => Number(row[value.field] ?? 0))),
+    1,
+  )
+
+  const angleStep = (Math.PI * 2) / dimensions.length
+  const ringLevels = [0.25, 0.5, 0.75, 1]
+
+  const polygonData = values.flatMap((value) => {
+    const metric = value.alias || value.field
+    const points = data.map((row, index) => {
+      const angle = angleStep * index - Math.PI / 2
+      const rawValue = Number(row[value.field] ?? 0)
+      const ratio = maxValue === 0 ? 0 : rawValue / maxValue
+      return {
+        指标: metric,
+        维度: String(row[axisField] ?? ''),
+        原始值: rawValue,
+        排序: index,
+        x: Number((Math.cos(angle) * ratio).toFixed(6)),
+        y: Number((Math.sin(angle) * ratio).toFixed(6)),
+      }
+    })
+
+    return points.length ? [...points, { ...points[0], 排序: points.length }] : points
+  })
+
+  const ringData = ringLevels.flatMap(level =>
+    dimensions.flatMap((dimension, index) => {
+      const angle = angleStep * index - Math.PI / 2
+      const point = {
+        圈层: `${Math.round(level * 100)}%`,
+        排序: index,
+        x: Number((Math.cos(angle) * level).toFixed(6)),
+        y: Number((Math.sin(angle) * level).toFixed(6)),
+      }
+      return index === dimensions.length - 1
+        ? [point, { ...point, 排序: dimensions.length, x: 0, y: -level }]
+        : [point]
+    }),
+  )
+
+  const axisData = dimensions.map((dimension, index) => {
+    const angle = angleStep * index - Math.PI / 2
+    const x = Number((Math.cos(angle) * 1.05).toFixed(6))
+    const y = Number((Math.sin(angle) * 1.05).toFixed(6))
+    return {
+      维度: dimension,
+      x1: 0,
+      y1: 0,
+      x2: x,
+      y2: y,
+      labelX: Number((Math.cos(angle) * 1.18).toFixed(6)),
+      labelY: Number((Math.sin(angle) * 1.18).toFixed(6)),
+    }
+  })
+
+  return {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    title: '数据分析',
+    width: 'container',
+    height: 'container',
+    background: '#ffffff',
+    padding: 24,
+    autosize: { type: 'fit', contains: 'padding' },
+    layer: [
+      {
+        data: { values: ringData },
+        mark: { type: 'line', color: '#e5e7eb', strokeWidth: 1 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          detail: { field: '圈层', type: 'nominal' },
+          order: { field: '排序', type: 'ordinal' },
+        },
+      },
+      {
+        data: { values: axisData },
+        mark: { type: 'rule', color: '#d1d5db', strokeWidth: 1 },
+        encoding: {
+          x: { field: 'x1', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y1', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          x2: { field: 'x2' },
+          y2: { field: 'y2' },
+        },
+      },
+      {
+        data: { values: polygonData },
+        mark: { type: 'line', interpolate: 'linear-closed', strokeWidth: 2.2, opacity: 0.9 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          color: { field: '指标', type: 'nominal', title: '指标' },
+          detail: { field: '指标', type: 'nominal' },
+          order: { field: '排序', type: 'ordinal' },
+          tooltip: [
+            { field: '指标', type: 'nominal' },
+            { field: '维度', type: 'nominal', title: axisTitle },
+            { field: '原始值', type: 'quantitative', title: '数值' },
+          ],
+        },
+      },
+      {
+        data: { values: polygonData },
+        transform: [{ filter: `datum.排序 < ${dimensions.length}` }],
+        mark: { type: 'point', filled: true, size: 70 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          color: { field: '指标', type: 'nominal', legend: null },
+          tooltip: [
+            { field: '指标', type: 'nominal' },
+            { field: '维度', type: 'nominal', title: axisTitle },
+            { field: '原始值', type: 'quantitative', title: '数值' },
+          ],
+        },
+      },
+      {
+        data: { values: axisData },
+        mark: { type: 'text', fontSize: 12, fill: '#4b5563', align: 'center', baseline: 'middle' },
+        encoding: {
+          x: { field: 'labelX', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'labelY', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          text: { field: '维度', type: 'nominal' },
+        },
+      },
+    ],
+    config: {
+      view: { stroke: null },
+    },
+  }
+}
+
 /**
  * 根据 data / config / chartType 构建 Vega-Lite spec
  */
@@ -84,9 +229,41 @@ function buildVegaSpec(): Record<string, any> | null {
   const values = config.values || []
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
+  const axisField = axes[0]?.alias || axes[0]?.field || ''
+  const axisTitle = axes[0]?.alias || axisField
 
-  const xField = axes[0]?.alias || ''
-  const xTitle = axes[0]?.alias || xField
+  if (chartType === 'radar') {
+    return buildRadarSpec(data, axisField, axisTitle, values)
+  }
+
+  if (chartType === 'point' && values.length >= 2) {
+    return {
+      $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+      title: '数据分析',
+      width: 'container',
+      height: 'container',
+      data: { values: data },
+      mark: { type: 'point', tooltip: true, filled: true, size: 100 },
+      encoding: {
+        x: {
+          field: values[0].field,
+          type: 'quantitative',
+          title: values[0].alias || values[0].field,
+        },
+        y: {
+          field: values[1].field,
+          type: 'quantitative',
+          title: values[1].alias || values[1].field,
+        },
+        color: axisField
+          ? { field: axisField, type: 'nominal', title: axisTitle }
+          : undefined,
+      },
+    }
+  }
+
+  const xField = axisField
+  const xTitle = axisTitle
   const yField = values[0]?.field || ''
   const yTitle = values[0]?.alias || yField
 
@@ -101,7 +278,7 @@ function buildVegaSpec(): Record<string, any> | null {
       const lf = legend[0].field
       encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
     }
-    if (chartType === 'line' && axes[0]?.group) {
+    if (['line', 'area', 'point'].includes(chartType) && axes[0]?.group) {
       encoding.x.type = 'temporal'
     }
   }
