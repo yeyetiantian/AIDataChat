@@ -5,7 +5,6 @@
         <div class="board-list-wrap">
           <ChartBoard
             :selected-card-key="selectedBoardKey"
-            @edit="loadToAnalysis"
             @toggle-config="handleToggleConfig"
           />
         </div>
@@ -45,28 +44,12 @@
     >
       <AIDialog @save="handleSaveToBoard" />
     </el-dialog>
-
-    <el-dialog v-model="showCreateDialog" title="新增看板" width="420px">
-      <el-form label-position="top">
-        <el-form-item label="看板名称">
-          <el-input v-model="createTitle" placeholder="请输入看板名称" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="createDesc" type="textarea" :rows="3" placeholder="请输入备注" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" :loading="chartStore.loading" @click="handleCreateBoard">确定</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
 import type { SavedChart } from '@/stores/useChartStore'
 import type { PivotConfig } from '@/types'
@@ -76,7 +59,6 @@ import ConfigPanel from '@/components/ConfigPanel.vue'
 import { createMockBoardCharts } from '@/constants/mockBoardCharts'
 import { ChatDotRound } from '@element-plus/icons-vue'
 
-const router = useRouter()
 const chartStore = useChartStore()
 
 type ConfigPanelHandle = {
@@ -84,29 +66,36 @@ type ConfigPanelHandle = {
   resetConfig: () => void
 }
 
-type ToggleBoardCard = SavedChart | {
+type ToggleBoardCard = (SavedChart & { isPlaceholder?: false }) | {
   id: string | number
   pivot_config: any
   chart_type: string
+  isPlaceholder?: boolean
 }
 
 const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
-const showCreateDialog = ref(false)
-const createTitle = ref('空白看板')
-const createDesc = ref('')
 const selectedBoardKey = ref<string | number | null>(null)
 const configPanelRef = ref<ConfigPanelHandle | null>(null)
 const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
 
+function createEmptyBoardConfig(): PivotConfig {
+  return {
+    filters: [],
+    axes: [],
+    legend: [],
+    values: [],
+    order_by: [],
+    limit: 10000,
+    having: [],
+    grand_total: false,
+    subtotals: false,
+  }
+}
+
 function closeConfigPanel() {
   showConfigPanel.value = false
   selectedBoardKey.value = null
-}
-
-function loadToAnalysis(chart: SavedChart) {
-  void chart
-  router.push('/set')
 }
 
 async function pivotApi(config: any) {
@@ -147,38 +136,11 @@ async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | '
   showAiDialog.value = false
 }
 
-function openCreateDialog() {
-  if (chartStore.charts.length >= MAX_BOARD_CHARTS) {
-    ElMessage.warning(`看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
-    return
-  }
-  createTitle.value = '空白看板'
-  createDesc.value = ''
-  showCreateDialog.value = true
-}
-
-async function handleCreateBoard() {
-  if (!createTitle.value.trim()) {
-    ElMessage.warning('请填写看板名称')
-    return
-  }
-
-  const emptyConfig: PivotConfig = {
-    filters: [],
-    axes: [],
-    legend: [],
-    values: [],
-    order_by: [],
-    limit: 10000,
-    having: [],
-    grand_total: false,
-    subtotals: false,
-  }
-
+async function createEmptyBoard() {
   const created = await chartStore.saveChart(
-    createTitle.value.trim(),
-    emptyConfig,
-    createDesc.value.trim(),
+    '空白看板',
+    createEmptyBoardConfig(),
+    '',
     'bar',
     null,
   )
@@ -189,7 +151,6 @@ async function handleCreateBoard() {
   }
 
   selectedBoardKey.value = created.id
-  showCreateDialog.value = false
   showConfigPanel.value = true
   await syncConfigPanel(created)
 }
@@ -214,6 +175,13 @@ async function syncConfigPanel(chart: SavedChart | null) {
 }
 
 async function handleToggleConfig(chart: ToggleBoardCard) {
+  if (chartStore.loading) return
+
+  if (chart.isPlaceholder) {
+    await createEmptyBoard()
+    return
+  }
+
   if (typeof chart.id !== 'number') return
   const nextKey = chart.id
   const isSameCard = selectedBoardKey.value === nextKey
@@ -234,16 +202,43 @@ watch(showConfigPanel, async (visible) => {
   await syncConfigPanel(current)
 })
 
-function handleCreateRequest() {
-  openCreateDialog()
+async function clearAllCharts() {
+  const chartsToDelete = [...chartStore.charts]
+
+  closeConfigPanel()
+
+  for (const chart of chartsToDelete) {
+    const deleted = await chartStore.deleteChart(chart.id)
+    if (!deleted) {
+      ElMessage.error(chartStore.error || `删除看板「${chart.title || chart.id}」失败`)
+      return false
+    }
+  }
+
+  await chartStore.fetchCharts()
+  return true
 }
 
 async function handleMockDataRequest() {
   await chartStore.fetchCharts()
 
   if (chartStore.charts.length > 0) {
-    ElMessage.warning('请先清空现有看板，再生成 6 种模拟图表数据')
-    return
+    try {
+      await ElMessageBox.confirm(
+        '生成模拟数据会先删除当前所有看板和报表数据，是否继续？',
+        '确认清空现有报表',
+        {
+          confirmButtonText: '确认删除并生成',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+
+    const cleared = await clearAllCharts()
+    if (!cleared) return
   }
 
   const mockCharts = createMockBoardCharts()
@@ -283,12 +278,10 @@ async function handleMockDataRequest() {
 }
 
 onMounted(() => {
-  window.addEventListener('board:create', handleCreateRequest)
   window.addEventListener('board:mock-data', handleMockDataRequest)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('board:create', handleCreateRequest)
   window.removeEventListener('board:mock-data', handleMockDataRequest)
 })
 </script>

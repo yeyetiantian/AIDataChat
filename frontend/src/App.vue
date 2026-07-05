@@ -9,11 +9,7 @@
       <div class="header-right">
         <button type="button" class="top-mock-button" title="数据模拟" @click="handleMockBoardData">
           <el-icon :size="16"><Collection /></el-icon>
-          <span>数据模拟</span>
-        </button>
-        <button type="button" class="top-create-button" title="新增" @click="handleCreateBoard">
-          <el-icon :size="16"><Plus /></el-icon>
-          <span>新增</span>
+          <span>模拟数据展示</span>
         </button>
       </div>
     </header>
@@ -29,20 +25,16 @@
 <script setup lang="ts">
 import { nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { Collection, Plus } from '@element-plus/icons-vue'
+import { Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
-async function dispatchBoardEvent(eventName: 'board:create' | 'board:mock-data') {
+async function dispatchBoardEvent(eventName: 'board:mock-data') {
   if (router.currentRoute.value.path !== '/board') {
     await router.push('/board')
     await nextTick()
   }
   window.dispatchEvent(new CustomEvent(eventName))
-}
-
-function handleCreateBoard() {
-  void dispatchBoardEvent('board:create')
 }
 
 function handleMockBoardData() {
@@ -104,23 +96,6 @@ html, body, #app {
   gap: 8px;
 }
 
-.top-create-button {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 14px;
-  border: none;
-  border-radius: 8px;
-  text-decoration: none;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  background: #409eff;
-  box-shadow: 0 6px 16px rgba(64, 158, 255, 0.2);
-  transition: all 0.2s;
-  cursor: pointer;
-}
-
 .top-mock-button {
   display: flex;
   align-items: center;
@@ -139,11 +114,6 @@ html, body, #app {
 .top-mock-button:hover {
   background: #e8f3ff;
   border-color: #bcdcff;
-}
-
-.top-create-button:hover {
-  background: #337ecc;
-  color: #ffffff;
 }
 
 .app-body {
