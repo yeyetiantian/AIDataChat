@@ -146,7 +146,14 @@ def run_pyinstaller() -> None:
     cmd.append(str(BACKEND_DIR / "run.py"))
 
     print(f"[build] PyInstaller 命令: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=BACKEND_DIR, check=True)
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("[build] ❌ PyInstaller 失败，stderr:")
+        print(result.stderr[-3000:] if result.stderr else "(无 stderr)")
+        print("[build] ❌ 最后 30 行 stdout:")
+        lines = (result.stdout or "").splitlines()
+        print("\n".join(lines[-30:]))
+        result.check_returncode()
     print(f"[build] PyInstaller 打包完成")
 
 
