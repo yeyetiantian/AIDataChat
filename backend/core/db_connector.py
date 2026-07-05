@@ -1,21 +1,35 @@
 """DuckDB 连接管理（简化版）
 
 只保留 WIDE_DETAIL 宽表库连接。
+支持 PyInstaller 打包运行模式。
 """
 
 from __future__ import annotations
 
 import atexit
 import os
+import sys
 
 import duckdb
 
-_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _get_base_dir() -> str:
+    """获取 backend 基础目录（源码模式或打包模式）"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+_backend_dir = _get_base_dir()
 
 
 def get_wide_db_path() -> str:
     """WIDE_DETAIL 宽表库路径（vcloud_wide.db）"""
-    raw = os.getenv("WIDE_DB_PATH", "../vcloud_wide.db").strip()
+    if getattr(sys, "frozen", False):
+        default = "vcloud_wide.db"
+    else:
+        default = "../vcloud_wide.db"
+    raw = os.getenv("WIDE_DB_PATH", default).strip()
     if os.path.isabs(raw):
         return raw
     return os.path.abspath(os.path.join(_backend_dir, raw))

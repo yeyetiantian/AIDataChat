@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 from typing import Literal, Optional
 
@@ -19,7 +20,12 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger("field_registry")
 
 LOCK = threading.Lock()
-_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包模式：data/ 在 sys._MEIPASS 下
+    _backend_dir = sys._MEIPASS
+else:
+    _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIELDS_JSON = os.path.join(_backend_dir, "data", "wide_fields.json")
 
 

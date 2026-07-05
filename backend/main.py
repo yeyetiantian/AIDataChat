@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # 加载 .env 配置
 load_dotenv()
@@ -69,6 +71,18 @@ app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(charts_router)
 app.include_router(recommend_router)
+
+# 生产环境：挂载前端静态文件
+if getattr(sys, "frozen", False):
+    _dist_dir = os.path.join(os.path.dirname(sys.executable), "dist")
+else:
+    _dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
+
+if os.path.isdir(_dist_dir):
+    logger.info("挂载前端静态文件: %s", _dist_dir)
+    app.mount("/", StaticFiles(directory=_dist_dir, html=True), name="frontend")
+else:
+    logger.warning("前端构建目录不存在（开发模式无需担心）: %s", _dist_dir)
 
 
 @app.get("/")

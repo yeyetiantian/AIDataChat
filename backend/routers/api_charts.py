@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 from datetime import datetime
 from typing import Any
@@ -19,8 +20,11 @@ logger = logging.getLogger("api_charts")
 
 router = APIRouter(prefix="/api/charts", tags=["charts"])
 
-# 数据文件路径（相对于 backend/ 目录）
-_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 数据文件路径（支持 PyInstaller 打包模式）
+if getattr(sys, "frozen", False):
+    _backend_dir = sys._MEIPASS
+else:
+    _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(_backend_dir, "data")
 DATA_FILE = os.path.join(DATA_DIR, "charts.json")
 _lock = threading.Lock()

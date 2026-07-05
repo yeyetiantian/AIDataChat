@@ -1,5 +1,58 @@
-{"filters":[],"axes":[{"field":"condition_met_time","alias":"前置条件满足时间"}],"legend":[{"field":"vehicle","alias":"车辆(VIN)"}],"values":[{"id":"val_1","field":"IBSBatSOC","aggregation":"sum","alias":"信号: IBSBatSOC"}],"order_by":[],"limit":10,"having":[],"chart_type":"bar","grand_total":false,"subtotals":false}
+Request:
+{
+  "filters": [
+    {
+      "field": "vehicle",
+      "op": "in",
+      "value": "",
+      select_ts: 时间戳,
+      select_order: 1,
+      filter_type: ''
+    }
+  ],
+  "axes": [
+    {
+      "field": "condition_met_time",
+      "alias": "前置条件满足时间"
+    }
+  ],
+  "legend": [
+    {
+      "field": "vehicle",
+      "alias": "车辆(VIN)"
+    }
+  ],
+  "values": [
+    {
+      "id": "val_1",
+      "field": "IBSBatSOC",
+      "aggregation": "sum",
+      "alias": "信号: IBSBatSOC",
+      "show_as": {
+        "type": "column_percentage"
+      }
+    },
+    {
+      "id": "val_2",
+      "field": "PrplsnSysAtv",
+      "aggregation": "count",
+      "alias": "信号: PrplsnSysAtv"
+    }
+  ],
+  "order_by": [
+    {
+      "field": "信号: IBSBatSOC",
+      "direction": "desc"
+    }
+  ],
+  "limit": 10,
+  "having": [],
+  "chart_type": "bar",
+  "grand_total": false,
+  "subtotals": false
+}
 
+返回：
 {
     "data": [
         {
@@ -1958,44 +2011,7 @@
             }
         }
     },
-    "config": {
-        "filters": [],
-        "axes": [
-            {
-                "field": "condition_met_time",
-                "alias": "前置条件满足时间",
-                "group": null,
-                "sort": "asc"
-            }
-        ],
-        "legend": [
-            {
-                "field": "vehicle",
-                "alias": "车辆(VIN)"
-            }
-        ],
-        "values": [
-            {
-                "id": "val_1",
-                "field": "IBSBatSOC",
-                "aggregation": "sum",
-                "alias": "信号: IBSBatSOC",
-                "expr": null,
-                "show_as": null
-            }
-        ],
-        "row_filters": [],
-        "col_filters": [],
-        "top_n": null,
-        "calculated_fields": [],
-        "calculated_items": [],
-        "order_by": [],
-        "pagination": null,
-        "chart_type": "bar",
-        "grand_total": false,
-        "subtotals": false,
-        "limit": 10
-    },
+    "config": 前端输入,
     "sql": "WITH base_data AS (SELECT\n    person,\n    vehicle_type,\n    vehicle,\n    task,\n    rule_name,\n    rule_type,\n    expression,\n    condition_met_time,\n    alarm_time,\n    duration_sec,\n    alarm_value,\n    freeze_frame,\n    \"IBSBatSOC\"\nFROM WIDE_DETAIL),\ngrouped_data AS (SELECT \"condition_met_time\" AS \"前置条件满足时间\", sum(CASE WHEN \"vehicle\" = 'LSGCF8N53SS169553' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGCF8N53SS169553_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGMJ5P25TV003247' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGMJ5P25TV003247_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGMJ5P29TV002229' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGMJ5P29TV002229_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGMJ5P29TV003249' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGMJ5P29TV003249_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGMJ5P2XTV002708' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGMJ5P2XTV002708_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGNB83L0V0990034' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGNB83L0V0990034_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGNB83L5V0990062' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGNB83L5V0990062_信号: IBSBatSOC\", sum(CASE WHEN \"vehicle\" = 'LSGNB83LXTS061891' THEN TRY_CAST(\"IBSBatSOC\" AS DOUBLE) END) AS \"LSGNB83LXTS061891_信号: IBSBatSOC\"\nFROM base_data\nGROUP BY \"condition_met_time\")\nSELECT * FROM grouped_data",
     "execution_time_ms": 14.26
 }
