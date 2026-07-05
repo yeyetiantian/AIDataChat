@@ -177,11 +177,29 @@ def run_pyinstaller() -> None:
         lines = (result.stdout or "").splitlines()
         print("\n".join(lines[-30:]))
         result.check_returncode()
+
+    # 将 data/ 和 dist/ 复制到可执行文件同级（不在 _internal 内）
+    _copy_to_output("data")
+    _copy_to_output("dist")
+
     print(f"[build] PyInstaller 打包完成")
 
 
+def _copy_to_output(dir_name: str) -> None:
+    """将目录从 backend/ 复制到 PyInstaller 输出目录（可执行文件同级）"""
+    src = BACKEND_DIR / dir_name
+    if not src.is_dir():
+        print(f"[build] 跳过 {dir_name}：源目录不存在")
+        return
+    out_dir = OUTPUT_DIR / "AIDataChat" / dir_name
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    shutil.copytree(src, out_dir)
+    print(f"[build] 复制 {dir_name} → {out_dir}")
+
+
 def create_archive() -> str:
-    """创建发布压缩包"""
+    """创建发布压缩包（扁平结构：data/、dist/、_internal/ 与可执行文件同级）"""
     platform_tag = {
         "win32": "windows",
         "darwin": "macos",
@@ -195,7 +213,6 @@ def create_archive() -> str:
 
     dist_dir = OUTPUT_DIR / "AIDataChat"
     if not dist_dir.exists():
-        # 尝试找其他目录
         for d in OUTPUT_DIR.iterdir():
             if d.is_dir():
                 dist_dir = d
@@ -203,18 +220,23 @@ def create_archive() -> str:
 
     version = os.getenv("RELEASE_VERSION", "1.0.0")
     archive_name = f"AIDataChat-{version}-{platform_tag}-{arch}"
+    prefix = f"{archive_name}/"
+
+    def _entries():
+        for f in dist_dir.rglob("*"):
+            yield f, f"{prefix}{f.relative_to(dist_dir)}"
 
     if sys.platform == "win32":
         archive_path = OUTPUT_DIR / f"{archive_name}.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in dist_dir.rglob("*"):
-                zf.write(f, f"{archive_name}/{f.relative_to(dist_dir.parent)}")
+            for src, dst in _entries():
+                zf.write(src, dst)
     else:
         archive_path = OUTPUT_DIR / f"{archive_name}.tar.gz"
         import tarfile
         with tarfile.open(archive_path, "w:gz") as tf:
-            for f in dist_dir.rglob("*"):
-                tf.add(f, f"{archive_name}/{f.relative_to(dist_dir.parent)}")
+            for src, dst in _entries():
+                tf.add(src, dst)
 
     print(f"[build] 压缩包: {archive_path}")
     return str(archive_path)

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from core.field_registry import get_schema_for_agent
 from core.pivot_sql_builder import execute_pivot
+from llm import get_auth_headers
 from models import PivotConfig
 
 logger = logging.getLogger("pivot_agent")
@@ -70,8 +71,27 @@ _schema_cache: Optional[str] = None
 _base_system_prompt: Optional[str] = None
 
 
+def _is_private_provider() -> bool:
+    """判断是否使用私有 LLM"""
+    return os.getenv("LLM_PROVIDER", "openai").strip().lower() == "private"
+
+
 def _get_llm() -> ChatOpenAI:
-    """全局单例 ChatOpenAI"""
+    """获取 ChatOpenAI 实例（支持 openai / private 两种 provider）"""
+    if _is_private_provider():
+        # Private LLM：每次调用拿新 token，不缓存
+        api_url = os.getenv("PRIVATE_LLM_API_URL")
+        model = os.getenv("PRIVATE_LLM_MODEL", "qwen-27b")
+        headers = get_auth_headers()
+        return ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            api_key="sk-placeholder",
+            base_url=api_url,
+            default_headers=headers,
+        )
+
+    # OpenAI / 兼容接口：全局单例
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(
@@ -84,11 +104,20 @@ def _get_llm() -> ChatOpenAI:
 
 
 def _get_structured_llm() -> Any:
-    """全局单例 Structured Output LLM（绑定 AgentOutput 模型）
+    """结构化输出 LLM（绑定 AgentOutput 模型）
 
     DeepSeek API 暂不支持 response_format / function_calling 强制结构化，
     保留此方法做尝试，失败则回退到手动解析。
     """
+    if _is_private_provider():
+        # Private LLM：每次都创建（token 可能过期，且 function_calling 可能不支持）
+        try:
+            return _get_llm().with_structured_output(AgentOutput, method="function_calling")
+        except Exception:
+            logger.warning("Private LLM 不支持 StructuredOutput，将使用手动 JSON 解析")
+            return None
+
+    # OpenAI / 兼容接口：全局缓存
     global _structured_llm
     if _structured_llm is None:
         try:
@@ -617,8 +646,16 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     import uuid
     start = time.time()
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    # 检查认证配置
+    if _is_private_provider():
+        if not os.getenv("PRIVATE_LLM_CLIENT_ID") or not os.getenv("PRIVATE_LLM_TOKEN_URL"):
+            return {
+                "reply": "私有 LLM 需要配置 PRIVATE_LLM_CLIENT_ID / PRIVATE_LLM_TOKEN_URL 环境变量",
+                "charts": [],
+                "suggestions": [],
+                "execution_time_ms": 0,
+            }
+    elif not os.getenv("OPENAI_API_KEY"):
         return {
             "reply": "AI 对话需要配置 OPENAI_API_KEY 环境变量，请先在 .env 文件中设置。",
             "charts": [],

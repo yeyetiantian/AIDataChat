@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/charts", tags=["charts"])
 
 # 数据文件路径（支持 PyInstaller 打包模式）
 if getattr(sys, "frozen", False):
-    _backend_dir = sys._MEIPASS
+    _backend_dir = os.path.dirname(os.path.abspath(sys.executable))
 else:
     _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(_backend_dir, "data")

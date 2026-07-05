@@ -22,8 +22,8 @@ logger = logging.getLogger("field_registry")
 LOCK = threading.Lock()
 
 if getattr(sys, "frozen", False):
-    # PyInstaller 打包模式：data/ 在 sys._MEIPASS 下
-    _backend_dir = sys._MEIPASS
+    # 打包模式：data/ 在可执行文件同级目录
+    _backend_dir = os.path.dirname(os.path.abspath(sys.executable))
 else:
     _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIELDS_JSON = os.path.join(_backend_dir, "data", "wide_fields.json")
