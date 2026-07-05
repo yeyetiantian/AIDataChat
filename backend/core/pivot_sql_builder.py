@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -176,6 +177,14 @@ def _to_dict(obj: Any) -> dict[str, Any]:
     return dict(obj)
 
 
+def _sql_quote(value: str) -> str:
+    """安全引用 SQL 字符串值（转义单引号，检测表达式不引）"""
+    # 检测 SQL 表达式：函数调用、关键字、运算符号
+    if re.search(r"\w+\s*\(", value) or re.search(r"\b(INTERVAL|SELECT|CASE|NOW|DATE_TRUNC|EXTRACT)\b", value, re.IGNORECASE):
+        return value
+    return f"'{value.replace(chr(39), chr(39)+chr(39))}'"
+
+
 def _build_where_clause(filters: list[Any]) -> str:
     """构建 WHERE 子句"""
     if not filters:
@@ -193,11 +202,11 @@ def _build_where_clause(filters: list[Any]) -> str:
         if op == "between":
             vals = value if isinstance(value, (list, tuple)) else []
             if len(vals) >= 2:
-                clauses.append(f'"{field}" BETWEEN \'{vals[0]}\' AND \'{vals[1]}\'')
+                clauses.append(f'"{field}" BETWEEN {_sql_quote(str(vals[0]))} AND {_sql_quote(str(vals[1]))}')
             continue
         if op == "in":
             vals = value if isinstance(value, (list, tuple)) else [value]
-            formatted = ", ".join(f"'{v}'" for v in vals)
+            formatted = ", ".join(_sql_quote(str(v)) for v in vals)
             clauses.append(f'"{field}" IN ({formatted})')
             continue
         if op in ("contains", "like"):
@@ -210,7 +219,7 @@ def _build_where_clause(filters: list[Any]) -> str:
             clauses.append(f'"{field}" LIKE \'%{value}\'')
             continue
         if isinstance(value, str):
-            clauses.append(f'"{field}" {OP_MAP[op]} \'{value}\'')
+            clauses.append(f'"{field}" {OP_MAP[op]} {_sql_quote(value)}')
         else:
             clauses.append(f'"{field}" {OP_MAP[op]} {value}')
     return " AND ".join(clauses) if clauses else ""

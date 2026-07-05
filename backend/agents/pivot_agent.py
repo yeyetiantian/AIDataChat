@@ -128,6 +128,7 @@ def _get_base_system_prompt() -> str:
 suggestions 字段必须为空列表（无需生成追问）。
 
 ### 2. 图表分析模式（统一使用 charts 数组）
+只有用户明确要你生成多个图表时你才生成多个图表，其他情况一律单个图表。
 所有图表配置统一使用 charts 数组，即使只生成一个图表也放在 charts 中。
 每个图表包含 title、pivot_config、chart_type。
 
