@@ -6,9 +6,7 @@ import { ref } from 'vue'
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
-  data?: Record<string, any>[] | null
-  chart_type?: string
-  pivot_config?: Record<string, any> | null
+  charts?: Record<string, any>[] | null
   suggestions?: string[]
 }
 
@@ -32,14 +30,12 @@ export const useChatStore = defineStore('chat', () => {
         throw new Error(err.detail || 'AI 分析失败')
       }
 
-      const data = await resp.json()
+      const resp_data = await resp.json()
       messages.value.push({
         role: 'assistant',
-        content: data.reply || '已生成分析配置',
-        data: data.data || null,
-        chart_type: data.chart_type || 'bar',
-        pivot_config: data.pivot_config || null,
-        suggestions: data.suggestions || [],
+        content: resp_data.reply || '已生成分析配置',
+        charts: resp_data.charts || null,
+        suggestions: resp_data.suggestions || [],
       })
     } catch (e: any) {
       messages.value.push({

@@ -21,10 +21,13 @@
           <div class="message-text">{{ msg.content }}</div>
 
           <!-- 图表显示 -->
-          <div v-if="msg.data && msg.data.length" class="message-chart">
-            <VegaLiteRenderer :data="msg.data" :config="msg.pivot_config" :chart-type="msg.chart_type || 'bar'" />
-            <div class="chart-actions">
-              <el-button size="small" type="primary" @click="saveToBoard(msg)">保存到看板</el-button>
+          <div v-if="msg.charts && msg.charts.length" class="message-charts">
+            <div v-for="(chart, ci) in msg.charts" :key="ci" class="message-chart">
+              <div class="chart-title" v-if="chart.title">{{ chart.title }}</div>
+              <VegaLiteRenderer :data="chart.data" :config="chart.pivot_config" :chart-type="chart.chart_type || 'bar'" :sql="chart.sql || null" />
+              <div class="chart-actions">
+                <el-button size="small" type="primary" @click="saveChartToBoard(chart, ci)">保存到看板</el-button>
+              </div>
             </div>
           </div>
 
@@ -86,7 +89,7 @@
 import { ref, nextTick, watch } from 'vue'
 import { ChatLineSquare, Promotion } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
-import { useChatStore, type ChatMessage } from '@/stores/useChatStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useChartStore, type SavedChart } from '@/stores/useChartStore'
 import type { PivotConfig } from '@/types'
 
@@ -103,7 +106,7 @@ const showSaveDialog = ref(false)
 const saveTitle = ref('')
 const saveDesc = ref('')
 const saving = ref(false)
-const savingMessage = ref<ChatMessage | null>(null)
+const savingMessage = ref<any>(null)
 
 const suggestions = [
   '各车型触发次数分布',
@@ -123,9 +126,9 @@ function onSuggest(text: string) {
   chatStore.sendMessage(text)
 }
 
-function saveToBoard(msg: ChatMessage) {
-  savingMessage.value = msg
-  saveTitle.value = (msg.content || '').substring(0, 30) + '...'
+function saveChartToBoard(chart: any, index: number) {
+  savingMessage.value = chart
+  saveTitle.value = chart.title || `图表 ${index + 1}`
   saveDesc.value = ''
   showSaveDialog.value = true
 }
@@ -134,13 +137,13 @@ async function confirmSave() {
   if (!saveTitle.value.trim() || !savingMessage.value) return
   saving.value = true
   try {
-    const msg = savingMessage.value
+    const chart = savingMessage.value
     emit('save', {
       title: saveTitle.value,
       description: saveDesc.value,
-      pivot_config: (msg.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
-      chart_type: msg.chart_type || 'bar',
-      data: msg.data || null,
+      pivot_config: (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
+      chart_type: chart.chart_type || 'bar',
+      data: chart.data || null,
     })
     showSaveDialog.value = false
     savingMessage.value = null
@@ -148,6 +151,8 @@ async function confirmSave() {
     saving.value = false
   }
 }
+
+
 
 // 滚动到底部
 watch(() => chatStore.messages.length, async () => {
@@ -260,6 +265,13 @@ watch(() => chatStore.messages.length, async () => {
 .message-text {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  padding: 8px 12px 0;
 }
 
 .message-chart {

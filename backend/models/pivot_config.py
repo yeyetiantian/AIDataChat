@@ -147,12 +147,9 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """AI 对话响应"""
     reply: str = Field(..., description="AI 回复文本")
-    pivot_config: Optional[PivotConfig] = Field(None, description="生成的透视表配置")
-    vega_spec: dict[str, Any] = Field(default_factory=dict, description="Vega-Lite 图表规格")
-    data: Optional[list[dict[str, Any]]] = Field(None, description="查询数据")
-    sql: Optional[str] = Field(None, description="生成的 SQL")
-    chart_type: str = Field("bar", description="图表类型")
+    charts: list[dict[str, Any]] = Field(default_factory=list, description="图表列表（每个元素含 pivot_config/data/sql/chart_type）")
     suggestions: list[str] = Field(default_factory=list, description="AI 推荐的下一个问题")
+    execution_time_ms: float = Field(0, description="执行耗时")
     execution_time_ms: float = Field(0, description="执行耗时")
 
 

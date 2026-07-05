@@ -361,7 +361,11 @@ class PivotSQLBuilder:
             if isinstance(f, dict):
                 add(f)
                 if f.get("name"): s.add(str(f["name"]))
-        for o in self.order_by: add(o)
+        for o in self.order_by:
+            # order_by 的 field 可能是 value id（如 val_1），不是实际列名，跳过
+            v = o.get("field")
+            if isinstance(v, str) and v and not v.startswith("val_"):
+                s.add(v)
         if isinstance(self.top_n, dict): add(self.top_n)
         return s
 
@@ -777,10 +781,18 @@ class PivotSQLBuilder:
         return f"SELECT * FROM {src}\nQUALIFY ROW_NUMBER() OVER (ORDER BY \"{by_column}\" {direction}) <= {count}"
 
     def _build_order_by(self) -> str:
-        """Step 8: ORDER BY"""
+        """Step 8: ORDER BY（自动将 value id 解析为实际列名）"""
         if not self.order_by:
             return ""
-        clauses = [f'"{o["field"]}" {o.get("direction", "desc")}' for o in self.order_by]
+        clauses: list[str] = []
+        for ob in self.order_by:
+            field = ob["field"]
+            # 如果 field 是 value 的 id（如 "val_1"），解析为实际 SQL 列名
+            for v in self.values:
+                if v.get("id") == field:
+                    field = v.get("field") or v.get("alias") or field
+                    break
+            clauses.append(f'"{field}" {ob.get("direction", "desc")}')
         return f"\nORDER BY {', '.join(clauses)}"
 
     def _build_pagination(self) -> tuple[str, str]:
