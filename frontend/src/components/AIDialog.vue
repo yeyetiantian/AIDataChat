@@ -22,10 +22,22 @@
 
           <!-- 图表显示 -->
           <div v-if="msg.data && msg.data.length" class="message-chart">
-            <VegaLiteRenderer :data="msg.data" :config="msg.pivot_config" :chart-type="msg.chart_type || 'bar'" @suggest="onSuggest" />
+            <VegaLiteRenderer :data="msg.data" :config="msg.pivot_config" :chart-type="msg.chart_type || 'bar'" />
             <div class="chart-actions">
               <el-button size="small" type="primary" @click="saveToBoard(msg)">保存到看板</el-button>
             </div>
+          </div>
+
+          <!-- 建议标签 -->
+          <div v-if="msg.suggestions && msg.suggestions.length" class="message-suggestions">
+            <el-tag
+              v-for="s in msg.suggestions" :key="s"
+              size="small"
+              class="suggest-tag"
+              @click="onSuggest(s)"
+            >
+              {{ s }}
+            </el-tag>
           </div>
         </div>
       </div>
@@ -107,6 +119,7 @@ function handleSend() {
 }
 
 function onSuggest(text: string) {
+  if (chatStore.loading) return
   chatStore.sendMessage(text)
 }
 
@@ -261,6 +274,27 @@ watch(() => chatStore.messages.length, async () => {
   padding: 8px;
   text-align: right;
   border-top: 1px solid #ebeef5;
+}
+
+.message-suggestions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.suggest-tag {
+  cursor: pointer;
+  border-color: #f5d0d0 !important;
+  color: #d93a3a !important;
+  background: #fff5f5 !important;
+  font-size: 12px;
+  border-radius: 12px;
+  transition: all 0.2s;
+}
+.suggest-tag:hover {
+  background: #d93a3a !important;
+  color: #fff !important;
+  border-color: #d93a3a !important;
 }
 
 .typing-dots {

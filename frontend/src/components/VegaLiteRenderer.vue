@@ -20,18 +20,6 @@
 
       <!-- 图表容器 -->
       <div ref="vegaContainer" class="vega-container"></div>
-
-      <!-- 建议标签 -->
-      <div v-if="suggestions.length" class="chart-suggestions">
-        <el-tag
-          v-for="s in suggestions" :key="s"
-          size="small"
-          class="suggest-tag"
-          @click="$emit('suggest', s)"
-        >
-          {{ s }}
-        </el-tag>
-      </div>
     </template>
 
     <!-- SQL 弹窗 -->
@@ -68,10 +56,6 @@ const props = defineProps<{
   columns?: string[]
   sql?: string | null
   executionTimeMs?: number
-}>()
-
-const emit = defineEmits<{
-  suggest: [text: string]
 }>()
 
 const chartContainer = ref<HTMLElement | null>(null)
@@ -169,43 +153,6 @@ function buildVegaSpec(): Record<string, any> | null {
 
 const canRender = computed(() => {
   return props.data && props.data.length > 0 && props.config
-})
-
-// 根据当前图表生成 3 个相关建议
-const suggestions = computed(() => {
-  const result: string[] = []
-  const config = props.config
-  const axes = config?.axes || []
-  const legend = config?.legend || []
-  const values = config?.values || []
-  if (!axes.length || !values.length) return result
-
-  const chartType = props.chartType || 'bar'
-  const xField = axes[0]?.alias || axes[0]?.field || ''
-  const xTitle = axes[0]?.alias || xField
-
-  // 1. 筛选第一个数据值（如果有有效数据）
-  if (props.data?.length && xField) {
-    const firstVal = props.data[0][xField]
-    if (firstVal) {
-      result.push(`只看"${firstVal}"的数据`)
-    }
-  }
-
-  // 2. 切换图表类型
-  const nextType: Record<string, string> = { bar: 'line', line: 'pie', pie: 'area', area: 'bar', point: 'line', radar: 'bar' }
-  const typeName: Record<string, string> = { bar: '柱状图', line: '折线图', pie: '饼状图', area: '波形图', point: '散点图', radar: '雷达图' }
-  const nt = nextType[chartType] || 'bar'
-  result.push(`改成${typeName[nt] || nt}`)
-
-  // 3. 按时间趋势 / 规则类型分组
-  if (!legend.length) {
-    result.push(`按时间趋势查看`)
-  } else {
-    result.push(`只看${values[0]?.alias || '数值'}最高的`)
-  }
-
-  return result
 })
 
 function toggleFullscreen() {
@@ -324,30 +271,5 @@ onMounted(async () => {
   overflow: auto;
   max-height: 320px;
   line-height: 1.55;
-}
-
-.chart-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 4px 16px 12px;
-  width: 100%;
-  justify-content: center;
-}
-
-.suggest-tag {
-  cursor: pointer;
-  border-color: #f5d0d0 !important;
-  color: #d93a3a !important;
-  background: #fff5f5 !important;
-  font-size: 12px;
-  border-radius: 12px;
-  padding: 0 10px;
-  transition: all 0.2s;
-}
-.suggest-tag:hover {
-  background: #d93a3a !important;
-  color: #fff !important;
-  border-color: #d93a3a !important;
 }
 </style>

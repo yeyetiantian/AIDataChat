@@ -152,6 +152,7 @@ class ChatResponse(BaseModel):
     data: Optional[list[dict[str, Any]]] = Field(None, description="查询数据")
     sql: Optional[str] = Field(None, description="生成的 SQL")
     chart_type: str = Field("bar", description="图表类型")
+    suggestions: list[str] = Field(default_factory=list, description="AI 推荐的下一个问题")
     execution_time_ms: float = Field(0, description="执行耗时")
 
 

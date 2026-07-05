@@ -113,7 +113,8 @@ def _get_base_system_prompt() -> str:
     "limit": 10000
   }}}},
   "reply": "对结果的文字说明",
-  "chart_type": "bar"
+  "chart_type": "bar",
+  "suggestions": ["只看"SUV"的数据", "改成折线图", "按时间趋势查看"]
 }}}}
 
 ### 字段说明
@@ -151,6 +152,7 @@ class AgentState(TypedDict):
     intent: Optional[str]               # "chart" | "chat"
     pivot_config: Optional[dict[str, Any]]
     chart_type: Optional[str]
+    suggestions: list[str]
     sql: Optional[str]
     data: Optional[list[dict[str, Any]]]
     vega_spec: Optional[dict[str, Any]]
@@ -184,6 +186,7 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
         "sql": state.get("sql"),
         "data_rows": len(state.get("data", []) or []),
         "reply": state.get("reply"),
+        "suggestions": state.get("suggestions"),
         "error": state.get("error"),
         "trace": state.get("trace_log", []),
     }
@@ -245,6 +248,7 @@ def analyze_node(state: AgentState) -> AgentState:
         if intent == "chat":
             state["intent"] = "chat"
             state["reply"] = result.get("reply", "")
+            state["suggestions"] = result.get("suggestions", [])
             state["pivot_config"] = None
             state["chart_type"] = "bar"
             state["error"] = None
@@ -255,6 +259,7 @@ def analyze_node(state: AgentState) -> AgentState:
             chart_type = result.get("chart_type", "bar")
             state["pivot_config"] = pivot_config_dict
             state["chart_type"] = chart_type
+            state["suggestions"] = result.get("suggestions", [])
             state["reply"] = result.get("reply", "已生成分析配置。")
             state["error"] = None
             trace.append({
@@ -417,6 +422,7 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
         "intent": None,
         "pivot_config": None,
         "chart_type": "bar",
+        "suggestions": [],
         "sql": None,
         "data": None,
         "vega_spec": None,
@@ -428,14 +434,33 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     config = {"configurable": {"thread_id": thread_id}}
     result = await agent.ainvoke(state, config)
 
+    # 调试：查看 result 中的 suggestions
+    logger.info("Agent result keys: %s", list(result.keys()))
+    logger.info("Agent suggestions from result: %s", repr(result.get("suggestions", "NOT_FOUND")))
+
+    reply_text = result.get("reply", "")
+    pivot_cfg = result.get("pivot_config") if result.get("intent") == "chart" else None
+    suggestions_list = result.get("suggestions", [])
+
+    # 兜底：从最后一次 trace 快照中获取
+    if not suggestions_list:
+        traces = result.get("trace_log", [])
+        for t_ in reversed(traces):
+            if t_.get("step") == "analyze_end":
+                snap = t_.get("output_snapshot", {})
+                suggestions_list = snap.get("suggestions", [])
+                logger.info("Fell back to trace analyze_end suggestions: %s", suggestions_list)
+                break
+
     elapsed = (time.time() - start) * 1000
 
     return {
-        "reply": result.get("reply", ""),
-        "pivot_config": result.get("pivot_config") if result.get("intent") == "chart" else None,
+        "reply": reply_text,
+        "pivot_config": pivot_cfg,
         "vega_spec": result.get("vega_spec") or {},
         "data": result.get("data"),
         "sql": result.get("sql"),
         "chart_type": result.get("chart_type", "bar"),
+        "suggestions": suggestions_list,
         "execution_time_ms": round(elapsed, 2),
     }
