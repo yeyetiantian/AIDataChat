@@ -68,7 +68,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AIDataChat-${{ github.event.inputs.version || '1.0.0' }}-${{ matrix.target }}
-          path: backend/package_output/AIDataChat-*.tar.gz
+          path: backend/package_output/AIDataChat-*.*
           if-no-files-found: error
           compression-level: 0
 
