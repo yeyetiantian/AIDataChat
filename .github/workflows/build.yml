@@ -36,6 +36,8 @@ jobs:
             target: windows
 
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
 
     steps:
       - uses: actions/checkout@v4
