@@ -13,6 +13,9 @@ export const API_FILTER_FIELDS = ['task', 'rule_name', 'vehicle', 'alarm_time'] 
 /** 筛选器联动接口下拉字段 */
 export const API_DROPDOWN_FILTER_FIELDS = ['task', 'rule_name', 'vehicle'] as const
 
+/** 筛选器变更时需刷新信号列表的字段 */
+export const SIGNAL_TRIGGER_FILTER_FIELDS = ['task', 'rule_name'] as const
+
 /** 筛选器下拉静态数据 */
 export const STATIC_DROPDOWN_DATA: Record<string, string[]> = {
   person: ['张三', '李四', '王五'],
