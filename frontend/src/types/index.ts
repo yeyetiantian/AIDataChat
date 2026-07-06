@@ -5,6 +5,9 @@ export interface FilterItem {
   op: string
   value: any
   alias?: string
+  select_ts?: string
+  select_order?: number
+  filter_type?: 'string' | 'number' | 'date'
 }
 
 export interface AxisItem {

@@ -56,29 +56,35 @@
                   <el-date-picker
                     v-if="item.op !== 'between'"
                     v-model="item.value"
-                    type="datetime"
-                    value-format="YYYY-MM-DD HH:mm:ss"
+                    type="date"
+                    value-format="YYYY-MM-DD"
                     size="small"
                     class="filter-date-picker"
-                    placeholder="选择日期时间"
+                    placeholder="选择日期"
+                    :disabled-date="getDisabledDateForField(item.field)"
+                    @change="() => onFilterFieldChange(item)"
                   />
                   <div v-else-if="Array.isArray(item.value)" class="between-inputs">
                     <el-date-picker
                       v-model="item.value[0]"
-                      type="datetime"
-                      value-format="YYYY-MM-DD HH:mm:ss"
+                      type="date"
+                      value-format="YYYY-MM-DD"
                       size="small"
                       class="filter-date-picker-sm"
                       placeholder="开始"
+                      :disabled-date="getDisabledDateForField(item.field)"
+                      @change="() => onFilterFieldChange(item)"
                     />
                     <span>~</span>
                     <el-date-picker
                       v-model="item.value[1]"
-                      type="datetime"
-                      value-format="YYYY-MM-DD HH:mm:ss"
+                      type="date"
+                      value-format="YYYY-MM-DD"
                       size="small"
                       class="filter-date-picker-sm"
                       placeholder="结束"
+                      :disabled-date="getDisabledDateForField(item.field)"
+                      @change="() => onFilterFieldChange(item)"
                     />
                   </div>
                 </template>
@@ -104,6 +110,7 @@
                     controls-position="right"
                     :controls="false"
                     placeholder="值"
+                    @blur="() => onFilterFieldChange(item)"
                   />
                   <div v-else-if="Array.isArray(item.value)" class="between-inputs">
                     <el-input-number
@@ -115,6 +122,7 @@
                       :controls="false"
                       controls-position="right"
                       placeholder="最小"
+                      @blur="() => onFilterFieldChange(item)"
                     />
                     <span>~</span>
                     <el-input-number
@@ -126,6 +134,7 @@
                       class="filter-number-input-sm"
                       controls-position="right"
                       placeholder="最大"
+                      @blur="() => onFilterFieldChange(item)"
                     />
                   </div>
                 </template>
@@ -147,12 +156,32 @@
                     size="small"
                     class="filter-text-input"
                     placeholder="值"
+                    @blur="() => onFilterFieldChange(item)"
                   />
                   <div v-else-if="Array.isArray(item.value)" class="between-inputs">
-                    <el-input v-model="item.value[0]" size="small" class="filter-text-input-sm" placeholder="开始" />
+                    <el-input v-model="item.value[0]" size="small" class="filter-text-input-sm" placeholder="开始" @blur="() => onFilterFieldChange(item)" />
                     <span>~</span>
-                    <el-input v-model="item.value[1]" size="small" class="filter-text-input-sm" placeholder="结束" />
+                    <el-input v-model="item.value[1]" size="small" class="filter-text-input-sm" placeholder="结束" @blur="() => onFilterFieldChange(item)" />
                   </div>
+                </template>
+                <template v-else-if="isApiDropdownField(item.field)">
+                  <el-select
+                    :model-value="item.value"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    size="small"
+                    class="filter-value-select"
+                    placeholder="选择值"
+                    @update:model-value="(val: string[]) => onApiFilterMultiChange(item, val)"
+                  >
+                    <el-option
+                      v-for="opt in getFilterOptions(item.field)"
+                      :key="opt.value === '' ? '__all__' : opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
                 </template>
                 <template v-else>
                   <el-select
@@ -336,7 +365,22 @@ import type {
   PivotConfig,
   RecommendChartResponse,
 } from '@/types'
-import { TIME_FILTER_FIELDS, NUMERIC_FILTER_FIELDS, STRING_FILTER_FIELDS, STATIC_DROPDOWN_DATA } from '@/constants/filterDropdown'
+import {
+  TIME_FILTER_FIELDS,
+  NUMERIC_FILTER_FIELDS,
+  STRING_FILTER_FIELDS,
+  API_FILTER_FIELDS,
+  API_DROPDOWN_FILTER_FIELDS,
+  STATIC_DROPDOWN_DATA,
+} from '@/constants/filterDropdown'
+import {
+  fetchFilterSelectOptions,
+  toSelectApiOp,
+  toSelectApiValue,
+  normalizeApiDate,
+  clampDateToRange,
+  type FilterSelectResponseItem,
+} from '@/api/filterSelect'
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
 
@@ -346,7 +390,9 @@ interface DropdownOption {
 }
 
 const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
+const alarmTimeRange = reactive({ start: '', end: '' })
 const resultDialogVisible = ref(false)
+let filterSelectRequestId = 0
 const latestRecommendedTop = ref<string | null>(null)
 const latestRecommendKey = ref('')
 let recommendTimer: ReturnType<typeof setTimeout> | null = null
@@ -434,42 +480,163 @@ function isStringFilterField(field: string): boolean {
   return (STRING_FILTER_FIELDS as readonly string[]).includes(field)
 }
 
-function isDropdownFilterField(field: string): boolean {
-  return !isTimeFilterField(field) && !isNumericFilterField(field) && !isStringFilterField(field)
+function isApiFilterField(field: string): boolean {
+  return (API_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isApiDropdownField(field: string): boolean {
+  return (API_DROPDOWN_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isStaticDropdownField(field: string): boolean {
+  return !isTimeFilterField(field) && !isNumericFilterField(field) && !isStringFilterField(field) && !isApiDropdownField(field)
 }
 
 function isResultViewField(field: string): boolean {
   return (RESULT_VIEW_FIELDS as readonly string[]).includes(field)
 }
 
+function getFilterType(field: string): FilterItem['filter_type'] {
+  if (isTimeFilterField(field)) return 'date'
+  if (isNumericFilterField(field)) return 'number'
+  return 'string'
+}
+
+function syncFilterSelectOrders() {
+  stateData.filters.forEach((item, index) => {
+    item.select_order = index + 1
+    item.filter_type = item.filter_type || getFilterType(item.field)
+  })
+}
+
+function touchFilterSelectTs(item: FilterItem) {
+  item.select_ts = String(Date.now())
+}
+
+function buildSelectApiFilters(): FilterItem[] {
+  syncFilterSelectOrders()
+  return stateData.filters.map(item => {
+    const filterType = item.filter_type || getFilterType(item.field)
+    return {
+      field: item.field,
+      op: toSelectApiOp(item.op, item.field, filterType),
+      value: toSelectApiValue(item, filterType),
+      select_ts: item.select_ts ?? '',
+      select_order: item.select_order ?? 0,
+      filter_type: filterType,
+    }
+  })
+}
+
+function applyAlarmTimeRange(startAlarmTime?: string, endAlarmTime?: string) {
+  if (!startAlarmTime && !endAlarmTime) return
+  alarmTimeRange.start = normalizeApiDate(startAlarmTime)
+  alarmTimeRange.end = normalizeApiDate(endAlarmTime)
+  clampAlarmTimeFilterValue()
+}
+
+function clampAlarmTimeFilterValue() {
+  const item = stateData.filters.find(f => f.field === 'alarm_time')
+  if (!item) return
+  const { start, end } = alarmTimeRange
+  if (!start && !end) return
+
+  if (item.op === 'between' && Array.isArray(item.value)) {
+    let v0 = item.value[0] ? clampDateToRange(String(item.value[0]), start, end) : (start || end || '')
+    let v1 = item.value[1] ? clampDateToRange(String(item.value[1]), start, end) : (end || start || '')
+    if (v0 && v1 && v0 > v1) v1 = v0
+    item.value = [v0, v1]
+    return
+  }
+
+  if (item.value) {
+    item.value = clampDateToRange(String(item.value), start, end)
+  } else if (start) {
+    item.value = start
+  }
+}
+
+// function intersectFilterDropdownValues(field: string) {
+//   const item = stateData.filters.find(f => f.field === field)
+//   if (!item || !isApiDropdownField(field) || !Array.isArray(item.value)) return
+//
+//   const validIds = new Set(
+//     (dropdownCache[field] ?? []).map(o => o.value).filter(v => v !== ''),
+//   )
+//   const matched = item.value.filter(v => v !== '' && validIds.has(String(v)))
+//   item.value = matched.length > 0 ? matched : ['']
+// }
+
+function getDisabledDateForField(field: string) {
+  if (field !== 'alarm_time') return () => false
+  return (date: Date) => {
+    const { start, end } = alarmTimeRange
+    if (!start && !end) return false
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    const current = `${y}-${m}-${d}`
+    if (start && current < start) return true
+    if (end && current > end) return true
+    return false
+  }
+}
+
+function applyFilterSelectResponseItem(resp: FilterSelectResponseItem) {
+  applyAlarmTimeRange(resp.startAlarmTime, resp.endAlarmTime)
+
+  if (isApiDropdownField(resp.field)) {
+    dropdownCache[resp.field] = [
+      { label: '全部', value: '' },
+      ...(resp.dropDown ?? []).map(item => ({ label: item.name, value: item.id })),
+    ]
+    // intersectFilterDropdownValues(resp.field)
+  }
+}
+
+async function refreshFilterSelectOptions(focusField: string) {
+  if (!isApiFilterField(focusField) && !stateData.filters.some(f => isApiFilterField(f.field))) return
+
+  const requestId = ++filterSelectRequestId
+  try {
+    const resp = await fetchFilterSelectOptions({
+      filters: buildSelectApiFilters(),
+      focusField,
+    })
+    if (requestId !== filterSelectRequestId) return
+
+    if (Array.isArray(resp)) {
+      resp.forEach(item => applyFilterSelectResponseItem(item))
+    } else {
+      applyFilterSelectResponseItem(resp)
+    }
+  } catch (e) {
+    console.error('[ConfigPanel] 获取筛选联动数据失败', e)
+  }
+}
+
+function onFilterFieldChange(item: FilterItem) {
+  touchFilterSelectTs(item)
+  syncFilterSelectOrders()
+  refreshFilterSelectOptions(item.field)
+}
+
 function getFilterOptions(field: string): DropdownOption[] {
   return dropdownCache[field] ?? [{ label: '全部', value: '' }]
 }
 
-async function loadFilterDropdown(field: string): Promise<DropdownOption[]> {
-  if (dropdownCache[field]) return dropdownCache[field]
-
-  // TODO: 接口就绪后取消注释，改用接口数据
-  // try {
-  //   const resp = await fetch(`/api/getDropdown?type=${encodeURIComponent(field)}`)
-  //   if (resp.ok) {
-  //     const data: { label: string; value?: string }[] = await resp.json()
-  //     dropdownCache[field] = [
-  //       { label: '全部', value: '' },
-  //       ...data.map((item, i) => ({ label: item.label, value: item.value ?? String(i) })),
-  //     ]
-  //     return dropdownCache[field]
-  //   }
-  // } catch (e) {
-  //   console.error('[ConfigPanel] 获取下拉数据失败', field, e)
-  // }
+async function loadFilterDropdown(field: string) {
+  if (isApiDropdownField(field)) {
+    await refreshFilterSelectOptions(field)
+    return
+  }
+  if (dropdownCache[field]) return
 
   const labels = STATIC_DROPDOWN_DATA[field] ?? []
   dropdownCache[field] = [
     { label: '全部', value: '' },
     ...labels.map((label, i) => ({ label, value: String(i) })),
   ]
-  return dropdownCache[field]
 }
 
 function onFilterMultiChange(item: FilterItem, val: string[]) {
@@ -489,6 +656,11 @@ function onFilterMultiChange(item: FilterItem, val: string[]) {
   } else {
     item.value = val
   }
+}
+
+function onApiFilterMultiChange(item: FilterItem, val: string[]) {
+  onFilterMultiChange(item, val)
+  onFilterFieldChange(item)
 }
 
 function formatNumericValue(val: unknown): string {
@@ -518,34 +690,46 @@ function ensureFilterAlias(item: FilterItem): FilterItem {
 function normalizeRangeFilterValue(item: FilterItem): FilterItem {
   if (item.op === 'between') {
     const v = item.value
-    if (Array.isArray(v)) return { ...item, value: [v[0] ?? '', v[1] ?? ''] }
+    if (Array.isArray(v)) {
+      return { ...item, value: [normalizeApiDate(String(v[0] ?? '')) || '', normalizeApiDate(String(v[1] ?? '')) || ''] }
+    }
     if (typeof v === 'string' && v.includes(',')) {
       const [a, b] = v.split(',')
-      return { ...item, value: [a ?? '', b ?? ''] }
+      return { ...item, value: [normalizeApiDate(a) || '', normalizeApiDate(b) || ''] }
     }
     return { ...item, value: ['', ''] }
   }
-  return { ...item, value: typeof item.value === 'string' ? item.value : '' }
+  const normalized = normalizeApiDate(typeof item.value === 'string' ? item.value : '')
+  return { ...item, value: normalized || '' }
 }
 
-function normalizeFilterForUI(item: FilterItem): FilterItem {
-  const base = ensureFilterAlias(item)
+function ensureFilterMeta(item: FilterItem, order: number): FilterItem {
+  return {
+    ...ensureFilterAlias(item),
+    select_ts: item.select_ts ?? '',
+    select_order: item.select_order ?? order,
+    filter_type: item.filter_type ?? getFilterType(item.field),
+  }
+}
+
+function normalizeFilterForUI(item: FilterItem, order = 1): FilterItem {
+  const base = ensureFilterMeta(item, order)
   if (isTimeFilterField(base.field) || isStringFilterField(base.field)) {
-    return ensureFilterAlias(normalizeRangeFilterValue(base))
+    return ensureFilterMeta(normalizeRangeFilterValue(base), order)
   }
   if (isNumericFilterField(base.field)) {
     if (base.op === 'between') {
       const v = base.value
       if (Array.isArray(v)) {
-        return ensureFilterAlias({ ...base, value: [parseNumericValue(v[0]), parseNumericValue(v[1])] })
+        return ensureFilterMeta({ ...base, value: [parseNumericValue(v[0]), parseNumericValue(v[1])] }, order)
       }
       if (typeof v === 'string' && v.includes(',')) {
         const [a, b] = v.split(',')
-        return ensureFilterAlias({ ...base, value: [parseNumericValue(a), parseNumericValue(b)] })
+        return ensureFilterMeta({ ...base, value: [parseNumericValue(a), parseNumericValue(b)] }, order)
       }
-      return ensureFilterAlias({ ...base, value: [null, null] })
+      return ensureFilterMeta({ ...base, value: [null, null] }, order)
     }
-    return ensureFilterAlias({ ...base, value: parseNumericValue(base.value) })
+    return ensureFilterMeta({ ...base, value: parseNumericValue(base.value) }, order)
   }
   const op = base.op === '=' ? 'in' : (base.op || 'in')
   let values: string[]
@@ -557,27 +741,33 @@ function normalizeFilterForUI(item: FilterItem): FilterItem {
     values = ['']
   }
   if (values.length === 0) values = ['']
-  return ensureFilterAlias({ ...base, op, value: values })
+  return ensureFilterMeta({ ...base, op, value: values }, order)
 }
 
 function serializeFilterForApi(item: FilterItem): FilterItem {
+  const filterType = item.filter_type ?? getFilterType(item.field)
+  const meta = {
+    select_ts: item.select_ts ?? '',
+    select_order: item.select_order,
+    filter_type: filterType,
+  }
   if (isTimeFilterField(item.field) || isStringFilterField(item.field)) {
     if (item.op === 'between' && Array.isArray(item.value)) {
-      return { field: item.field, op: item.op, value: item.value.join(',') }
+      return { field: item.field, op: item.op, value: item.value.join(','), ...meta }
     }
-    return { field: item.field, op: item.op, value: item.value }
+    return { field: item.field, op: item.op, value: item.value, ...meta }
   }
   if (isNumericFilterField(item.field)) {
     if (item.op === 'between' && Array.isArray(item.value)) {
-      return { field: item.field, op: item.op, value: item.value.map(formatNumericValue).join(',') }
+      return { field: item.field, op: item.op, value: item.value.map(formatNumericValue).join(','), ...meta }
     }
-    return { field: item.field, op: item.op, value: formatNumericValue(item.value) }
+    return { field: item.field, op: item.op, value: formatNumericValue(item.value), ...meta }
   }
   const arr = Array.isArray(item.value) ? item.value : [item.value]
   if (arr.length === 0 || (arr.length === 1 && arr[0] === '')) {
-    return { field: item.field, op: 'in', value: '' }
+    return { field: item.field, op: 'in', value: '', ...meta }
   }
-  return { field: item.field, op: 'in', value: arr.filter(v => v !== '').join(',') }
+  return { field: item.field, op: 'in', value: arr.filter(v => v !== '').join(','), ...meta }
 }
 
 function onRangeFilterOpChange(item: FilterItem, op: string | number) {
@@ -589,6 +779,7 @@ function onRangeFilterOpChange(item: FilterItem, op: string | number) {
     item.value = item.value[0] ?? ''
   }
   item.op = opStr
+  onFilterFieldChange(item)
 }
 
 function onStringFilterOpChange(item: FilterItem, op: string | number) {
@@ -604,6 +795,7 @@ function onNumericFilterOpChange(item: FilterItem, op: string | number) {
     item.value = parseNumericValue(item.value[0])
   }
   item.op = opStr
+  onFilterFieldChange(item)
 }
 
 function onTimeFilterOpChange(item: FilterItem, op: string | number) {
@@ -651,15 +843,25 @@ function onDrop(event: DragEvent, zone: ZoneType) {
     const isNumeric = isNumericFilterField(field.name)
     const isString = isStringFilterField(field.name)
     let newFilter: FilterItem
+    const meta = {
+      alias: field.alias_cn,
+      select_ts: '',
+      filter_type: getFilterType(field.name),
+    }
     if (isTime || isString) {
-      newFilter = { field: field.name, alias: field.alias_cn, op: '=', value: '' }
+      newFilter = { field: field.name, op: '=', value: '', ...meta }
     } else if (isNumeric) {
-      newFilter = { field: field.name, alias: field.alias_cn, op: '=', value: null }
+      newFilter = { field: field.name, op: '=', value: null, ...meta }
     } else {
-      newFilter = { field: field.name, alias: field.alias_cn, op: 'in', value: [''] }
-      loadFilterDropdown(field.name)
+      newFilter = { field: field.name, op: 'in', value: [''], ...meta }
     }
     stateData.filters.push(newFilter)
+    syncFilterSelectOrders()
+    if (isStaticDropdownField(field.name)) {
+      loadFilterDropdown(field.name)
+    } else if (isApiFilterField(field.name)) {
+      refreshFilterSelectOptions(field.name)
+    }
   } else if (zone === 'axes') {
     const axisItem: AxisItem = { field: field.name, alias: field.alias_cn, sort: 'asc' }
     if (isTimeFilterField(field.name)) axisItem.aggregation = 'source'
@@ -820,10 +1022,13 @@ function handleClear() {
 defineExpose({
   setDefaultValues: (config: PivotConfig) => {
     if (config.filters) {
-      stateData.filters = config.filters.map(normalizeFilterForUI)
+      stateData.filters = config.filters.map((f, i) => normalizeFilterForUI(f, i + 1))
+      syncFilterSelectOrders()
       config.filters.forEach(f => {
-        if (isDropdownFilterField(f.field)) loadFilterDropdown(f.field)
+        if (isStaticDropdownField(f.field)) loadFilterDropdown(f.field)
       })
+      const apiField = config.filters.find(f => isApiFilterField(f.field))?.field
+      if (apiField) refreshFilterSelectOptions(apiField)
     }
     if (config.axes) stateData.axes = config.axes.map(ensureAxisAggregation)
     if (config.legend) stateData.legend = config.legend
@@ -850,7 +1055,7 @@ onMounted(async () => {
     const resp = await fetch('/api/fields')
     if (resp.ok) {
       stateData.groups = await resp.json()
-      stateData.filters = stateData.filters.map(ensureFilterAlias)
+      stateData.filters = stateData.filters.map((f, i) => ensureFilterMeta(ensureFilterAlias(f), i + 1))
     }
   } catch (e) {
     console.error('[ConfigPanel] 获取字段列表失败', e)
