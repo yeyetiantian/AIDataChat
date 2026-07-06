@@ -3,8 +3,29 @@ import type { FilterItem } from '@/types'
 export const FILTER_SELECT_API = 'http://127.0.0.1:8080/api2/pivot/select'
 
 export interface FilterSelectDropdownItem {
-  id: string
+  id?: string
+  /** VIN */
   name: string
+  /** 泛亚编号 */
+  vinPatacId?: string
+  /** RMU模块号 */
+  rmuCode?: string
+}
+
+export function getFilterDropdownItemValue(item: FilterSelectDropdownItem): string {
+  return String(item.id ?? item.name ?? '')
+}
+
+export function toFilterDropdownOption(
+  item: FilterSelectDropdownItem,
+  field?: string,
+): { label: string; value: string } {
+  const value = getFilterDropdownItemValue(item)
+  let label = item.name
+  if (field === 'vehicle' && item.vinPatacId) {
+    label = `${item.vinPatacId}-${item.name}`
+  }
+  return { label, value }
 }
 
 export interface FilterSelectPayloadItem {
@@ -19,6 +40,7 @@ export interface FilterSelectPayloadItem {
 export interface FilterSelectRequest {
   filters: FilterSelectPayloadItem[]
   focusField: string
+  keyword?: string
 }
 
 export type FilterSelectResponse = FilterSelectResponseItem | FilterSelectResponseItem[]

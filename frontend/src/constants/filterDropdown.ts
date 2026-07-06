@@ -16,6 +16,15 @@ export const API_DROPDOWN_FILTER_FIELDS = ['task', 'rule_name', 'vehicle'] as co
 /** 筛选器变更时需刷新信号列表的字段 */
 export const SIGNAL_TRIGGER_FILTER_FIELDS = ['task', 'rule_name'] as const
 
+/** 筛选器变更时需刷新信号下拉（signal2）的字段 */
+export const SIGNAL_DROPDOWN_TRIGGER_FIELDS = ['task', 'rule_name', 'vehicle'] as const
+
+/** 信号筛选器下拉联动 focusField */
+export const SIGNAL_FILTER_DROPDOWN_FOCUS = 'signal2'
+
+/** 车辆下拉超过该条数时使用弹窗选择 */
+export const VEHICLE_DROPDOWN_DIALOG_THRESHOLD = 5
+
 /** 筛选器下拉静态数据 */
 export const STATIC_DROPDOWN_DATA: Record<string, string[]> = {
   person: ['张三', '李四', '王五'],

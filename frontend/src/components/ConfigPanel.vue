@@ -176,19 +176,83 @@
                     <el-input v-model="item.value[1]" size="small" class="filter-text-input-sm" placeholder="结束" @blur="() => onFilterFieldChange(item)" />
                   </div>
                 </template>
+                <template v-else-if="item.field === 'vehicle'">
+                  <el-select
+                    v-if="!isVehicleLargeList()"
+                    :model-value="item.value"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    filterable
+                    size="small"
+                    class="filter-value-select"
+                    placeholder="选择值"
+                    :loading="!!apiFilterSearchLoading.vehicle"
+                    @update:model-value="(val: string[]) => onApiFilterMultiChange(item, val)"
+                  >
+                    <el-option
+                      v-for="opt in getFilterOptions('vehicle')"
+                      :key="opt.value === '' ? '__all__' : opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                  <el-input
+                    v-else
+                    readonly
+                    size="small"
+                    class="filter-value-select vehicle-picker-input"
+                    :placeholder="getVehiclePickerPlaceholder(item)"
+                    :model-value="getVehiclePickerText(item)"
+                    @click="openVehicleDialog(item)"
+                  >
+                    <template #suffix>
+                      <el-icon><ArrowDown /></el-icon>
+                    </template>
+                  </el-input>
+                </template>
                 <template v-else-if="isApiDropdownField(item.field)">
                   <el-select
                     :model-value="item.value"
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
+                    filterable
+                    remote
+                    reserve-keyword
                     size="small"
                     class="filter-value-select"
                     placeholder="选择值"
+                    :loading="!!apiFilterSearchLoading[item.field]"
+                    :remote-method="(query: string) => onApiFilterRemoteSearch(item.field, query)"
                     @update:model-value="(val: string[]) => onApiFilterMultiChange(item, val)"
                   >
                     <el-option
                       v-for="opt in getFilterOptions(item.field)"
+                      :key="opt.value === '' ? '__all__' : opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                </template>
+                <template v-else-if="item.isSignal">
+                  <el-select
+                    :model-value="item.value"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    filterable
+                    remote
+                    reserve-keyword
+                    size="small"
+                    class="filter-value-select"
+                    placeholder="选择值"
+                    :loading="!!apiFilterSearchLoading[SIGNAL_FILTER_DROPDOWN_FOCUS]"
+                    :remote-method="onSignalFilterRemoteSearch"
+                    @update:model-value="(val: string[]) => onSignalFilterMultiChange(item, val)"
+                  >
+                    <el-option
+                      v-for="opt in getSignalFilterOptions()"
                       :key="opt.value === '' ? '__all__' : opt.value"
                       :label="opt.label"
                       :value="opt.value"
@@ -201,6 +265,7 @@
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
+                    filterable
                     size="small"
                     class="filter-value-select"
                     placeholder="选择值"
@@ -362,11 +427,17 @@
   </div>
 
   <ResultListDialog v-model="resultDialogVisible" />
+  <VehicleListDialog
+    v-model="vehicleDialogVisible"
+    :data="vehicleDropdownRaw"
+    :selected-values="vehicleDialogSelectedValues"
+    @confirm="onVehicleDialogConfirm"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, toRef, onBeforeUnmount, onMounted, watch } from 'vue'
-import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document } from '@element-plus/icons-vue'
+import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document, ArrowDown } from '@element-plus/icons-vue'
 import type {
   FieldDef,
   ZoneType,
@@ -385,17 +456,24 @@ import {
   API_DROPDOWN_FILTER_FIELDS,
   STATIC_DROPDOWN_DATA,
   SIGNAL_TRIGGER_FILTER_FIELDS,
+  SIGNAL_DROPDOWN_TRIGGER_FIELDS,
+  SIGNAL_FILTER_DROPDOWN_FOCUS,
+  VEHICLE_DROPDOWN_DIALOG_THRESHOLD,
 } from '@/constants/filterDropdown'
 import {
   fetchFilterSelectOptions,
   toSelectApiOp,
   toSelectApiValue,
+  toFilterDropdownOption,
   normalizeApiDate,
   clampDateToRange,
   type FilterSelectResponseItem,
+  type FilterSelectRequest,
+  type FilterSelectDropdownItem,
 } from '@/api/filterSelect'
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
+import VehicleListDialog from '@/components/VehicleListDialog.vue'
 
 interface DropdownOption {
   label: string
@@ -403,11 +481,24 @@ interface DropdownOption {
 }
 
 const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
+const apiFilterSearchLoading = reactive<Record<string, boolean>>({})
+const apiFilterKeywords = reactive<Record<string, string>>({})
 const alarmTimeRange = reactive({ start: '', end: '' })
 const signalFields = ref<FieldDef[]>([])
+const vehicleDropdownRaw = ref<FilterSelectDropdownItem[]>([])
 const resultDialogVisible = ref(false)
+const vehicleDialogVisible = ref(false)
+const vehicleDialogFilterItem = ref<FilterItem | null>(null)
+const vehicleDialogSelectedValues = computed(() => {
+  const item = vehicleDialogFilterItem.value
+  if (!item || !Array.isArray(item.value)) return []
+  return item.value.filter(v => v !== '' && v != null).map(String)
+})
 let filterSelectRequestId = 0
 let signalListRequestId = 0
+let signalFilterDropdownRequestId = 0
+const apiFilterSearchTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+const API_FILTER_SEARCH_DELAY = 300
 const latestRecommendedTop = ref<string | null>(null)
 const latestRecommendKey = ref('')
 let recommendTimer: ReturnType<typeof setTimeout> | null = null
@@ -495,6 +586,88 @@ const filteredSignalFields = computed(() => {
 
 function isSignalTriggerField(field: string): boolean {
   return (SIGNAL_TRIGGER_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function isSignalDropdownTriggerField(field: string): boolean {
+  return (SIGNAL_DROPDOWN_TRIGGER_FIELDS as readonly string[]).includes(field)
+}
+
+function canLoadSignalFilterDropdown(): boolean {
+  return stateData.filters.some(f => isSignalDropdownTriggerField(f.field))
+}
+
+function getAllSignalFilterSelectedValues(): string[] {
+  const values = new Set<string>()
+  stateData.filters.forEach(item => {
+    if (!item.isSignal || !Array.isArray(item.value)) return
+    item.value.forEach(v => {
+      if (v !== '' && v != null) values.add(String(v))
+    })
+  })
+  return Array.from(values)
+}
+
+function getSignalFilterOptions(): DropdownOption[] {
+  return dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? [{ label: '全部', value: '' }]
+}
+
+async function refreshSignalFilterDropdown(keyword?: string) {
+  if (!canLoadSignalFilterDropdown()) {
+    dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = [{ label: '全部', value: '' }]
+    return
+  }
+
+  const effectiveKeyword = keyword !== undefined
+    ? keyword
+    : getApiFilterKeyword(SIGNAL_FILTER_DROPDOWN_FOCUS)
+
+  const requestId = ++signalFilterDropdownRequestId
+  apiFilterSearchLoading[SIGNAL_FILTER_DROPDOWN_FOCUS] = true
+  try {
+    const body: FilterSelectRequest = {
+      filters: buildSelectApiFilters(),
+      focusField: SIGNAL_FILTER_DROPDOWN_FOCUS,
+    }
+    const trimmedKeyword = effectiveKeyword.trim()
+    if (trimmedKeyword) {
+      body.keyword = trimmedKeyword
+    }
+
+    const resp = await fetchFilterSelectOptions(body)
+    if (requestId !== signalFilterDropdownRequestId) return
+
+    const item = Array.isArray(resp)
+      ? resp.find(r => r.field === SIGNAL_FILTER_DROPDOWN_FOCUS) ?? resp[0]
+      : resp
+
+    const newOptions = (item?.dropDown ?? []).map(toFilterDropdownOption)
+    const selectedValues = getAllSignalFilterSelectedValues()
+    const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS])
+    dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = [
+      { label: '全部', value: '' },
+      ...merged,
+    ]
+  } catch (e) {
+    console.error('[ConfigPanel] 获取信号筛选下拉失败', e)
+  } finally {
+    apiFilterSearchLoading[SIGNAL_FILTER_DROPDOWN_FOCUS] = false
+  }
+}
+
+function onSignalFilterRemoteSearch(query: string) {
+  apiFilterKeywords[SIGNAL_FILTER_DROPDOWN_FOCUS] = query
+  if (apiFilterSearchTimers[SIGNAL_FILTER_DROPDOWN_FOCUS]) {
+    clearTimeout(apiFilterSearchTimers[SIGNAL_FILTER_DROPDOWN_FOCUS])
+  }
+  apiFilterSearchTimers[SIGNAL_FILTER_DROPDOWN_FOCUS] = setTimeout(() => {
+    refreshSignalFilterDropdown(query)
+  }, API_FILTER_SEARCH_DELAY)
+}
+
+function onSignalFilterMultiChange(item: FilterItem, val: string[]) {
+  onFilterMultiChange(item, val)
+  touchFilterSelectTs(item)
+  syncFilterSelectOrders()
 }
 
 function toSignalFieldDef(name: string): FieldDef {
@@ -688,23 +861,67 @@ function applyFilterSelectResponseItem(resp: FilterSelectResponseItem) {
   applyAlarmTimeRange(resp.startAlarmTime, resp.endAlarmTime)
 
   if (isApiDropdownField(resp.field)) {
+    if (resp.field === 'vehicle') {
+      vehicleDropdownRaw.value = resp.dropDown ?? []
+    }
+    const newOptions = (resp.dropDown ?? []).map(item => toFilterDropdownOption(item, resp.field))
+    const selectedValues = getSelectedFilterValues(resp.field)
+    const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[resp.field])
     dropdownCache[resp.field] = [
       { label: '全部', value: '' },
-      ...(resp.dropDown ?? []).map(item => ({ label: item.name, value: item.id })),
+      ...merged,
     ]
     // intersectFilterDropdownValues(resp.field)
   }
 }
 
-async function refreshFilterSelectOptions(focusField: string) {
+function getSelectedFilterValues(field: string): string[] {
+  const item = stateData.filters.find(f => f.field === field)
+  if (!item || !Array.isArray(item.value)) return []
+  return item.value.filter(v => v !== '' && v != null).map(String)
+}
+
+function mergeSelectedIntoOptions(
+  newOptions: DropdownOption[],
+  selectedValues: string[],
+  prevOptions?: DropdownOption[],
+): DropdownOption[] {
+  const map = new Map(newOptions.map(o => [o.value, o]))
+  const prevMap = new Map((prevOptions ?? []).filter(o => o.value !== '').map(o => [o.value, o]))
+  for (const val of selectedValues) {
+    if (!map.has(val) && prevMap.has(val)) {
+      map.set(val, prevMap.get(val)!)
+    }
+  }
+  return Array.from(map.values())
+}
+
+function getApiFilterKeyword(field: string): string {
+  return apiFilterKeywords[field] ?? ''
+}
+
+async function refreshFilterSelectOptions(focusField: string, keyword?: string) {
   if (!isApiFilterField(focusField) && !stateData.filters.some(f => isApiFilterField(f.field))) return
 
+  const effectiveKeyword = keyword !== undefined
+    ? keyword
+    : (isApiDropdownField(focusField) ? getApiFilterKeyword(focusField) : '')
+
   const requestId = ++filterSelectRequestId
+  if (isApiDropdownField(focusField)) {
+    apiFilterSearchLoading[focusField] = true
+  }
   try {
-    const resp = await fetchFilterSelectOptions({
+    const body: FilterSelectRequest = {
       filters: buildSelectApiFilters(),
       focusField,
-    })
+    }
+    const trimmedKeyword = effectiveKeyword.trim()
+    if (trimmedKeyword) {
+      body.keyword = trimmedKeyword
+    }
+
+    const resp = await fetchFilterSelectOptions(body)
     if (requestId !== filterSelectRequestId) return
 
     if (Array.isArray(resp)) {
@@ -714,7 +931,29 @@ async function refreshFilterSelectOptions(focusField: string) {
     }
   } catch (e) {
     console.error('[ConfigPanel] 获取筛选联动数据失败', e)
+  } finally {
+    if (isApiDropdownField(focusField)) {
+      apiFilterSearchLoading[focusField] = false
+    }
   }
+}
+
+function refreshLinkedFilterSelectOptions(excludeField?: string) {
+  const fields = stateData.filters
+    .map(f => f.field)
+    .filter((field, index, arr) => isApiFilterField(field) && field !== excludeField && arr.indexOf(field) === index)
+  fields.forEach(field => refreshFilterSelectOptions(field))
+}
+
+function onApiFilterRemoteSearch(field: string, query: string) {
+  if (!isApiDropdownField(field) || field === 'vehicle') return
+  apiFilterKeywords[field] = query
+  if (apiFilterSearchTimers[field]) {
+    clearTimeout(apiFilterSearchTimers[field])
+  }
+  apiFilterSearchTimers[field] = setTimeout(() => {
+    refreshFilterSelectOptions(field, query)
+  }, API_FILTER_SEARCH_DELAY)
 }
 
 function onFilterFieldChange(item: FilterItem) {
@@ -724,10 +963,46 @@ function onFilterFieldChange(item: FilterItem) {
   if (isSignalTriggerField(item.field)) {
     refreshSignalList()
   }
+  if (isSignalDropdownTriggerField(item.field)) {
+    refreshSignalFilterDropdown()
+  }
 }
 
 function getFilterOptions(field: string): DropdownOption[] {
   return dropdownCache[field] ?? [{ label: '全部', value: '' }]
+}
+
+function getVehicleOptionCount(): number {
+  return (dropdownCache.vehicle ?? []).filter(o => o.value !== '').length
+}
+
+function isVehicleLargeList(): boolean {
+  return getVehicleOptionCount() > VEHICLE_DROPDOWN_DIALOG_THRESHOLD
+}
+
+function getVehiclePickerPlaceholder(item: FilterItem): string {
+  const values = Array.isArray(item.value) ? item.value.filter(v => v !== '') : []
+  return values.length > 0 ? '' : '选择值'
+}
+
+function getVehiclePickerText(item: FilterItem): string {
+  const values = Array.isArray(item.value) ? item.value.filter(v => v !== '') : []
+  if (values.length === 0) return ''
+  const opts = dropdownCache.vehicle ?? []
+  const labels = values.map(v => opts.find(o => o.value === String(v))?.label ?? String(v))
+  return labels.join(', ')
+}
+
+function openVehicleDialog(item: FilterItem) {
+  vehicleDialogFilterItem.value = item
+  vehicleDialogVisible.value = true
+}
+
+function onVehicleDialogConfirm(selectedIds: string[]) {
+  const item = vehicleDialogFilterItem.value
+  if (!item) return
+  onApiFilterMultiChange(item, selectedIds.length > 0 ? selectedIds : [''])
+  vehicleDialogFilterItem.value = null
 }
 
 async function loadFilterDropdown(field: string) {
@@ -765,7 +1040,15 @@ function onFilterMultiChange(item: FilterItem, val: string[]) {
 
 function onApiFilterMultiChange(item: FilterItem, val: string[]) {
   onFilterMultiChange(item, val)
-  onFilterFieldChange(item)
+  touchFilterSelectTs(item)
+  syncFilterSelectOrders()
+  refreshLinkedFilterSelectOptions(item.field)
+  if (isSignalTriggerField(item.field)) {
+    refreshSignalList()
+  }
+  if (isSignalDropdownTriggerField(item.field)) {
+    refreshSignalFilterDropdown()
+  }
 }
 
 function formatNumericValue(val: unknown): string {
@@ -982,6 +1265,9 @@ function onDrop(event: DragEvent, zone: ZoneType) {
       loadFilterDropdown(field.name)
     } else if (isApiFilterField(field.name)) {
       refreshFilterSelectOptions(field.name)
+      if (isSignalDropdownTriggerField(field.name)) {
+        refreshSignalFilterDropdown()
+      }
     }
     if (isSignalTriggerField(field.name)) {
       refreshSignalList()
@@ -1014,8 +1300,14 @@ function removeItem(index: number, zone: ZoneType) {
   if (!arr) return
   const removedFilter = zone === 'filters' ? (arr[index] as FilterItem) : null
   arr.splice(index, 1)
+  if (removedFilter && isApiDropdownField(removedFilter.field)) {
+    delete apiFilterKeywords[removedFilter.field]
+  }
   if (removedFilter && isSignalTriggerField(removedFilter.field)) {
     refreshSignalList()
+  }
+  if (removedFilter && (isSignalDropdownTriggerField(removedFilter.field) || removedFilter.isSignal)) {
+    refreshSignalFilterDropdown()
   }
 }
 
@@ -1145,6 +1437,10 @@ function handleClear() {
   stateData.having = []
   stateData.chartType = 'bar'
   signalFields.value = []
+  vehicleDropdownRaw.value = []
+  Object.keys(apiFilterKeywords).forEach(key => delete apiFilterKeywords[key])
+  delete dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS]
+  delete dropdownCache.vehicle
   latestRecommendedTop.value = null
   latestRecommendKey.value = ''
 }
@@ -1162,6 +1458,9 @@ defineExpose({
       if (apiField) refreshFilterSelectOptions(apiField)
       if (config.filters.some(f => isSignalTriggerField(f.field))) {
         refreshSignalList()
+      }
+      if (canLoadSignalFilterDropdown()) {
+        refreshSignalFilterDropdown()
       }
     }
     if (config.axes) stateData.axes = config.axes.map(ensureAxisAggregation)
@@ -1200,6 +1499,7 @@ onBeforeUnmount(() => {
   if (recommendTimer) {
     clearTimeout(recommendTimer)
   }
+  Object.values(apiFilterSearchTimers).forEach(timer => clearTimeout(timer))
 })
 </script>
 
@@ -1474,6 +1774,14 @@ onBeforeUnmount(() => {
 .filter-value-select {
   flex: 1;
   min-width: 0;
+}
+
+.vehicle-picker-input {
+  cursor: pointer;
+}
+
+.vehicle-picker-input :deep(.el-input__inner) {
+  cursor: pointer;
 }
 
 .filter-date-picker {
