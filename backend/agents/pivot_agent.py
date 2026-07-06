@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from core.field_registry import get_schema_for_agent
 from core.pivot_sql_builder import execute_pivot
 from llm import get_auth_headers
-from models import PivotConfig
+from models import PivotConfig, PivotResponse
 
 logger = logging.getLogger("pivot_agent")
 
@@ -579,6 +579,52 @@ def validate_config_node(state: AgentState) -> AgentState:
     return state
 
 
+# ---- Pivot 查询：HTTP 调用 ----
+
+_PIVOT_API_URL: str | None = None
+
+
+def _get_pivot_api_url() -> str:
+    """获取 Pivot API 地址（环境变量 PIVOT_API_URL，默认 http://127.0.0.1:8000/api/pivot）"""
+    global _PIVOT_API_URL
+    if _PIVOT_API_URL is None:
+        _PIVOT_API_URL = os.getenv("PIVOT_API_URL", "http://127.0.0.1:8000/api/pivot").rstrip("/")
+    return _PIVOT_API_URL
+
+
+def _pivot_via_http(config: PivotConfig) -> dict:
+    """通过 HTTP 调用 /api/pivot 执行查询，返回与 execute_pivot 相同的数据结构"""
+    import requests
+
+    url = _get_pivot_api_url()
+    payload = config.model_dump()
+
+    # 如果是私有 LLM，复用 auth headers 传给 pivot API
+    headers = {"Content-Type": "application/json"}
+    if _is_private_provider():
+        try:
+            h = get_auth_headers()
+            headers["access_token"] = h.get("access_token", "")
+        except Exception:
+            pass
+
+    resp = requests.post(url, json=payload, headers=headers, timeout=60)
+    if resp.status_code != 200:
+        detail = resp.json().get("detail", resp.text) if resp.text else resp.reason
+        raise RuntimeError(f"Pivot 查询失败: {detail}")
+
+    result = resp.json()
+    return {
+        "data": result.get("data", []),
+        "columns": result.get("columns", []),
+        "total": result.get("total", 0),
+        "vega_spec": result.get("vega_spec", {}),
+        "config": result.get("config"),
+        "sql": result.get("sql"),
+        "execution_time_ms": result.get("execution_time_ms", 0),
+    }
+
+
 def execute_node(state: AgentState) -> AgentState:
     """执行节点：遍历 state.charts 逐个查询数据，完整暴露 SQL"""
     trace = state.get("trace_log", [])
@@ -606,7 +652,7 @@ def execute_node(state: AgentState) -> AgentState:
         pc_dict["chart_type"] = ct
         try:
             cfg = PivotConfig(**pc_dict)
-            res = execute_pivot(cfg)
+            res = _pivot_via_http(cfg)
             chart["data"] = res.get("data", [])
             chart["vega_spec"] = res.get("vega_spec", {})
             chart["sql"] = res.get("sql")

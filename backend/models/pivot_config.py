@@ -12,16 +12,20 @@ from pydantic import BaseModel, Field, model_validator
 
 class FilterItem(BaseModel):
     """筛选器 → SQL WHERE"""
-    field: str = Field(..., description="字段名")
-    op: str = Field(..., description="操作符: =, !=, >, >=, <, <=, between, in, like, contains, starts_with, ends_with, is_null, is_not_null")
+    field: str = Field(..., description="字段名: task, vehicle, rule 等")
+    op: str = Field("eq", description="操作符: in, eq, =, !=, >, >=, <, <=, between, like, contains, starts_with, ends_with, is_null, is_not_null")
     value: Any = Field(None, description="筛选值")
+    select_ts: Optional[str] = Field(None, description="筛选时间戳")
+    select_order: Optional[int] = Field(None, description="筛选顺序")
+    filter_type: Optional[str] = Field("", description="筛选类型")
 
 
 class AxisItem(BaseModel):
     """轴 → SQL GROUP BY"""
     field: str = Field(..., description="字段名")
     alias: Optional[str] = Field(None, description="别名")
-    group: Optional[str] = Field(None, description="时间粒度: year, quarter, month, week, day, hour")
+    aggregation: Optional[str] = Field(None, description="时间粒度: year, quarter, month, week, day, hour（替代 group）")
+    group: Optional[str] = Field(None, description="（已废弃，请用 aggregation）时间粒度: year, quarter, month, week, day, hour")
     sort: Optional[Literal["asc", "desc"]] = Field("asc", description="排序方向")
 
 
@@ -116,6 +120,7 @@ class PivotConfig(BaseModel):
     # 扩展属性
     row_filters: list[FilterOnAgg] = Field(default_factory=list, description="行过滤 → HAVING（维度字段）")
     col_filters: list[FilterOnAgg] = Field(default_factory=list, description="列过滤 → HAVING（聚合值）")
+    having: list[FilterOnAgg] = Field(default_factory=list, description="HAVING 子句（兼容字段）")
     top_n: Optional[TopN] = Field(None, description="TOP N")
     calculated_fields: list[CalculatedField] = Field(default_factory=list, description="计算字段")
     calculated_items: list[CalculatedItem] = Field(default_factory=list, description="计算项")

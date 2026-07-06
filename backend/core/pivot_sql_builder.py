@@ -158,6 +158,7 @@ GROUP_FUNCTIONS: dict[str, str] = {
 
 OP_MAP: dict[str, str] = {
     "=": "=", "!=": "!=", ">": ">", ">=": ">=", "<": "<", "<=": "<=",
+    "eq": "=", "neq": "!=",
     "between": "BETWEEN", "in": "IN", "like": "LIKE",
     "contains": "LIKE", "starts_with": "LIKE", "ends_with": "LIKE",
     "is_null": "IS NULL", "is_not_null": "IS NOT NULL",
@@ -228,7 +229,8 @@ def _build_where_clause(filters: list[Any]) -> str:
 def _axis_expr(d: dict[str, Any], include_alias: bool = True) -> str:
     """轴字段表达式"""
     field = d["field"]
-    group = d.get("group")
+    # aggregation 是 group 的替代字段名（新版本 JSON 使用 aggregation）
+    group = d.get("aggregation") or d.get("group")
     alias = d.get("alias")
     expr = GROUP_FUNCTIONS[group].format(f'"{field}"') if group and group in GROUP_FUNCTIONS else f'"{field}"'
     if include_alias:
@@ -240,7 +242,7 @@ def _axis_expr(d: dict[str, Any], include_alias: bool = True) -> str:
 def _group_field(d: dict[str, Any]) -> str:
     """GROUP BY 表达式"""
     field = d["field"]
-    group = d.get("group")
+    group = d.get("aggregation") or d.get("group")
     if group and group in GROUP_FUNCTIONS:
         return GROUP_FUNCTIONS[group].format(f'"{field}"')
     return f'"{field}"'
@@ -409,7 +411,7 @@ class PivotSQLBuilder:
             cte_parts.append(f"show_as_data AS ({show_sql})")
             current = "show_as_data"
 
-        if self.row_filters or self.col_filters:
+        if self.row_filters or self.col_filters or self.having:
             having_sql = self._build_having(current)
             cte_parts.append(f"filtered_data AS ({having_sql})")
             current = "filtered_data"
@@ -716,7 +718,7 @@ class PivotSQLBuilder:
 
     def _build_having(self, src: str) -> str:
         """Step 5: HAVING"""
-        all_f = self.row_filters + self.col_filters
+        all_f = self.row_filters + self.col_filters + (self.having or [])
         if not all_f:
             return f"SELECT * FROM {src}"
         clauses: list[str] = []
