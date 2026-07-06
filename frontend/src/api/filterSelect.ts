@@ -26,9 +26,9 @@ export type FilterSelectResponse = FilterSelectResponseItem | FilterSelectRespon
 export interface FilterSelectResponseItem {
   field: string
   dropDown?: FilterSelectDropdownItem[] | null
-  startAlarmTime?: string | null
-  endAlarmTime?: string | null
-  signalList?: string[] | null
+  startAlarmTime?: string
+  endAlarmTime?: string
+  signalList?: string[]
 }
 
 export async function fetchFilterSelectOptions(body: FilterSelectRequest): Promise<FilterSelectResponse> {
