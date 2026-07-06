@@ -92,7 +92,7 @@
   {
     "name": "create_time",
     "alias_cn": "创建时间",
-    "data_type": "VARCHAR",
+    "data_type": "TIMESTAMP",
     "source_table": "WIDE_DETAIL",
     "description": "",
     "category": "measure",
