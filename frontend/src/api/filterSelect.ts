@@ -11,9 +11,9 @@ export interface FilterSelectPayloadItem {
   field: string
   op: string
   value: unknown[]
-  select_ts: string
-  select_order: number
-  filter_type: string
+  select_ts?: string
+  select_order?: number
+  filter_type?: string
 }
 
 export interface FilterSelectRequest {

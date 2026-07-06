@@ -496,7 +496,7 @@ function isResultViewField(field: string): boolean {
   return (RESULT_VIEW_FIELDS as readonly string[]).includes(field)
 }
 
-function getFilterType(field: string): FilterItem['filter_type'] {
+function getFilterType(field: string): string {
   if (isTimeFilterField(field)) return 'date'
   if (isNumericFilterField(field)) return 'number'
   return 'string'

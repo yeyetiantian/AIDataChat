@@ -7,7 +7,7 @@ export interface FilterItem {
   alias?: string
   select_ts?: string
   select_order?: number
-  filter_type?: 'string' | 'number' | 'date'
+  filter_type?: string
 }
 
 export interface AxisItem {
