@@ -12,6 +12,7 @@ export interface SavedChart {
   description: string
   pivot_config: PivotConfig
   chart_type: string
+  vega_spec?: Record<string, any> | null
   data?: Record<string, any>[] | null
   created_at: string
   updated_at: string
@@ -43,6 +44,7 @@ export const useChartStore = defineStore('charts', () => {
     pivotConfig: PivotConfig,
     description = '',
     chartType = 'bar',
+    vegaSpec?: Record<string, any> | null,
     data?: Record<string, any>[] | null,
   ) {
     loading.value = true
@@ -59,7 +61,14 @@ export const useChartStore = defineStore('charts', () => {
       const resp = await fetch(API_BASE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description, pivot_config: pivotConfig, chart_type: chartType, data }),
+        body: JSON.stringify({
+          title,
+          description,
+          pivot_config: pivotConfig,
+          chart_type: chartType,
+          vega_spec: vegaSpec,
+          data,
+        }),
       })
       if (!resp.ok) throw new Error('保存失败')
       await fetchCharts()

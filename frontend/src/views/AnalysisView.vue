@@ -16,6 +16,7 @@
         </div>
 
         <VegaLiteRenderer
+          :spec="chatResult?.vega_spec"
           :data="chatResult?.data"
           :config="pivotConfig"
           :chart-type="pivotConfig?.chart_type || 'bar'"
@@ -85,7 +86,14 @@ async function pivotApi(config: any) {
 async function handleSave() {
   if (!saveTitle.value.trim()) return
   const config = pivotConfig.value || (chatResult.value ? Object.assign({ filters: [], axes: [], legend: [], values: [] }, chatResult.value.config) : {})
-  const saved = await chartStore.saveChart(saveTitle.value, config, saveDesc.value, config?.chart_type || 'bar', chatResult.value?.data)
+  const saved = await chartStore.saveChart(
+    saveTitle.value,
+    config,
+    saveDesc.value,
+    config?.chart_type || 'bar',
+    chatResult.value?.vega_spec || null,
+    chatResult.value?.data,
+  )
   if (!saved) {
     ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
     return

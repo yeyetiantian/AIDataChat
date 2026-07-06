@@ -110,7 +110,7 @@ export interface PivotResponse {
   columns: string[]
   total: number
   vega_spec: Record<string, any>
-  config: PivotConfig
+  config: PivotConfig | null
   sql?: string
   execution_time_ms: number
 }
