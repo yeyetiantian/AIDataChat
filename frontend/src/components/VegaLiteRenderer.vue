@@ -1,11 +1,16 @@
 <template>
   <div class="vega-renderer" :class="{ 'is-fullscreen': isFullscreen }" ref="chartContainer">
-    <div v-if="!canRender" class="empty-state">
+    <div v-if="!data" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <template v-else>
+    <div v-else-if="data.length === 0" class="empty-state">
+      <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
+      <p>暂无数据</p>
+    </div>
+
+    <template v-else-if="canRender">
       <!-- 工具栏 -->
       <div v-if="!props.hideToolbar" class="chart-toolbar">
         <span v-if="props.executionTimeMs != null" class="exec-time">

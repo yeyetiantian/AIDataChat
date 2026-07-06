@@ -37,6 +37,10 @@ def main() -> None:
     base_dir = _get_base_dir()
     os.chdir(base_dir)
 
+    # 确保 backend/ 在模块搜索路径中（打包后或部分运行环境可能缺失）
+    if base_dir not in sys.path:
+        sys.path.insert(0, base_dir)
+
     # 加载 .env（必须在导入 main 之前执行）
     from dotenv import load_dotenv
 
