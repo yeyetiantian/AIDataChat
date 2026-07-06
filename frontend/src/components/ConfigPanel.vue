@@ -324,9 +324,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, toRef, onMounted } from 'vue'
+import { ref, reactive, computed, toRef, onBeforeUnmount, onMounted, watch } from 'vue'
 import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document } from '@element-plus/icons-vue'
-import type { FieldDef, ZoneType, FilterItem, AxisItem, LegendItem, ValueItem } from '@/types'
+import type {
+  FieldDef,
+  ZoneType,
+  FilterItem,
+  AxisItem,
+  LegendItem,
+  ValueItem,
+  PivotConfig,
+  RecommendChartResponse,
+} from '@/types'
 import { TIME_FILTER_FIELDS, NUMERIC_FILTER_FIELDS, STRING_FILTER_FIELDS, STATIC_DROPDOWN_DATA } from '@/constants/filterDropdown'
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
@@ -338,6 +347,10 @@ interface DropdownOption {
 
 const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
 const resultDialogVisible = ref(false)
+const latestRecommendedTop = ref<string | null>(null)
+const latestRecommendKey = ref('')
+let recommendTimer: ReturnType<typeof setTimeout> | null = null
+let recommendRequestId = 0
 
 export interface TableGroup {
   table_name: string
@@ -674,35 +687,117 @@ function removeItem(index: number, zone: ZoneType) {
   if (arr) arr.splice(index, 1)
 }
 
+function buildPivotConfig(): PivotConfig {
+  return {
+    filters: stateData.filters.map(serializeFilterForApi),
+    axes: stateData.axes.map(a => {
+      const axis: { field: string; alias?: string; group?: AxisItem['group'] } = {
+        field: a.field,
+        alias: a.alias,
+      }
+      if (isTimeFilterField(a.field)) {
+        axis.group = a.group ?? 'raw'
+      } else if (a.group) {
+        axis.group = a.group
+      }
+      return axis
+    }),
+    legend: stateData.legend.map(l => ({ field: l.field, alias: l.alias })),
+    values: stateData.values.map(v => ({
+      id: v.id,
+      field: v.field,
+      aggregation: v.aggregation,
+      alias: v.alias,
+      show_as: v.show_as,
+    })),
+    order_by: stateData.sortField.map(field => ({ field, direction: stateData.sortDir as 'asc' | 'desc' })),
+    limit: stateData.limitVal,
+    having: stateData.having.map(h => ({ field: h.field, op: h.op, value: h.value })),
+    chart_type: stateData.chartType,
+    grand_total: false,
+    subtotals: false,
+  }
+}
+
+function canRecommendChart() {
+  return stateData.axes.length > 0 && stateData.values.length > 0
+}
+
+function getRecommendKey(config: PivotConfig) {
+  return JSON.stringify({
+    axes: config.axes,
+    legend: config.legend,
+    values: config.values,
+  })
+}
+
+async function requestChartRecommendation(config: PivotConfig) {
+  const requestId = ++recommendRequestId
+  const recommendKey = getRecommendKey(config)
+
+  try {
+    const resp = await fetch('/api/recommend-chart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    })
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => null)
+      throw new Error(err?.detail || '图表推荐失败')
+    }
+
+    const result: RecommendChartResponse = await resp.json()
+    if (requestId !== recommendRequestId) return null
+
+    if (result.top) {
+      latestRecommendedTop.value = result.top
+      latestRecommendKey.value = recommendKey
+      stateData.chartType = result.top
+      return result.top
+    }
+  } catch (e) {
+    console.error('[ConfigPanel] 图表推荐失败', e)
+  }
+
+  if (requestId === recommendRequestId) {
+    latestRecommendedTop.value = null
+    latestRecommendKey.value = ''
+  }
+  return null
+}
+
+function scheduleChartRecommendation() {
+  if (recommendTimer) {
+    clearTimeout(recommendTimer)
+    recommendTimer = null
+  }
+
+  if (!canRecommendChart()) {
+    latestRecommendedTop.value = null
+    latestRecommendKey.value = ''
+    return
+  }
+
+  const config = buildPivotConfig()
+  recommendTimer = setTimeout(() => {
+    recommendTimer = null
+    void requestChartRecommendation(config)
+  }, 250)
+}
+
 async function handleQuery() {
   stateData.loading = true
   try {
-    const config = {
-      filters: stateData.filters.map(serializeFilterForApi),
-      axes: stateData.axes.map(a => {
-        const axis: { field: string; alias?: string; group?: AxisItem['group'] } = {
-          field: a.field,
-          alias: a.alias,
-        }
-        if (isTimeFilterField(a.field)) {
-          axis.group = a.group ?? 'raw'
-        } else if (a.group) {
-          axis.group = a.group
-        }
-        return axis
-      }),
-      legend: stateData.legend.map(l => ({ field: l.field, alias: l.alias })),
-      values: stateData.values.map(v => ({
-        id: v.id, field: v.field, aggregation: v.aggregation,
-        alias: v.alias, show_as: v.show_as,
-      })),
-      order_by: stateData.sortField.map(field => ({ field, direction: stateData.sortDir })),
-      limit: stateData.limitVal,
-      having: stateData.having.map(h => ({ field: h.field, op: h.op, value: h.value })),
-      chart_type: stateData.chartType,
-      grand_total: false,
-      subtotals: false,
+    if (canRecommendChart()) {
+      const recommendConfig = buildPivotConfig()
+      const currentRecommendKey = getRecommendKey(recommendConfig)
+      if (latestRecommendKey.value !== currentRecommendKey || !latestRecommendedTop.value) {
+        await requestChartRecommendation(recommendConfig)
+      }
     }
+
+    const config = buildPivotConfig()
     await props.api(config)
   } finally {
     stateData.loading = false
@@ -718,11 +813,14 @@ function handleClear() {
   stateData.sortDir = 'desc'
   stateData.limitVal = 10000
   stateData.having = []
+  stateData.chartType = 'bar'
+  latestRecommendedTop.value = null
+  latestRecommendKey.value = ''
 }
 
 // ========== 暴露给父组件的方法 ==========
 defineExpose({
-  setDefaultValues: (config: { filters?: FilterItem[]; axes?: AxisItem[]; legend?: LegendItem[]; values?: ValueItem[] }) => {
+  setDefaultValues: (config: PivotConfig) => {
     if (config.filters) {
       stateData.filters = config.filters.map(normalizeFilterForUI)
       config.filters.forEach(f => {
@@ -732,8 +830,21 @@ defineExpose({
     if (config.axes) stateData.axes = config.axes.map(ensureAxisGroup)
     if (config.legend) stateData.legend = config.legend
     if (config.values) stateData.values = config.values
+    if (config.chart_type) stateData.chartType = config.chart_type
   },
+  resetConfig: handleClear,
 })
+
+watch(
+  () => JSON.stringify({
+    axes: stateData.axes,
+    legend: stateData.legend,
+    values: stateData.values,
+  }),
+  () => {
+    scheduleChartRecommendation()
+  },
+)
 
 // ========== 初始化：获取字段列表 ==========
 onMounted(async () => {
@@ -745,6 +856,12 @@ onMounted(async () => {
     }
   } catch (e) {
     console.error('[ConfigPanel] 获取字段列表失败', e)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (recommendTimer) {
+    clearTimeout(recommendTimer)
   }
 })
 </script>

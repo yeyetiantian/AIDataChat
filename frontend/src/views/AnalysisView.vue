@@ -18,7 +18,7 @@
         <VegaLiteRenderer
           :data="chatResult?.data"
           :config="pivotConfig"
-          :chart-type="pivotConfig?.chartType || 'bar'"
+          :chart-type="pivotConfig?.chart_type || 'bar'"
           :columns="chatResult?.columns"
           :sql="chatResult?.sql"
           :execution-time-ms="chatResult?.execution_time_ms"
@@ -60,8 +60,6 @@ const pivotConfig = ref<any>(null)
 const showSaveDialog = ref(false)
 const saveTitle = ref('')
 const saveDesc = ref('')
-const chartType = ref('bar')
-
 async function pivotApi(config: any) {
   pivotConfig.value = config
   try {
@@ -87,7 +85,7 @@ async function pivotApi(config: any) {
 async function handleSave() {
   if (!saveTitle.value.trim()) return
   const config = pivotConfig.value || (chatResult.value ? Object.assign({ filters: [], axes: [], legend: [], values: [] }, chatResult.value.config) : {})
-  const saved = await chartStore.saveChart(saveTitle.value, config, saveDesc.value, chartType.value, chatResult.value?.data)
+  const saved = await chartStore.saveChart(saveTitle.value, config, saveDesc.value, config?.chart_type || 'bar', chatResult.value?.data)
   if (!saved) {
     ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
     return
