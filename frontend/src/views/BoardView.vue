@@ -53,6 +53,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
 import type { SavedChart } from '@/stores/useChartStore'
 import type { PivotConfig } from '@/types'
+import { normalizeApiDate } from '@/api/filterSelect'
 import ChartBoard from '@/components/ChartBoard.vue'
 import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
@@ -110,12 +111,24 @@ function toFilterValueArray(value: unknown) {
   return [value]
 }
 
+function toQueryFilterValue(filter: { filter_type?: string; op: string; value: unknown }) {
+  const values = toFilterValueArray(filter.value)
+  if (filter.filter_type === 'date' && filter.op === 'between' && values.length >= 2) {
+    return values.map((v, i) => {
+      const dateStr = normalizeApiDate(String(v))
+      if (!dateStr) return v
+      return i === 0 ? `${dateStr} 00:00:00` : `${dateStr} 23:59:59`
+    })
+  }
+  return values
+}
+
 function toBoardPivotRequest(config: PivotConfig) {
   return {
     filters: (config.filters ?? []).map((filter, index) => ({
       field: filter.field,
       op: filter.op,
-      value: toFilterValueArray(filter.value),
+      value: toQueryFilterValue(filter),
       select_ts: filter.select_ts ?? '',
       select_order: filter.select_order ?? index + 1,
       filter_type: filter.filter_type ?? '',

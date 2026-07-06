@@ -69,7 +69,6 @@
           </el-tag>
         </div>
       </div>
-
       <div v-if="chatStore.loading" class="message assistant">
         <div class="message-content">
           <div class="typing-dots">

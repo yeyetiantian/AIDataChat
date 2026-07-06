@@ -5,7 +5,7 @@
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <div v-else-if="!props.spec && data?.length === 0" class="empty-state">
+    <div v-else-if="!props.spec && props.data?.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>暂无数据</p>
     </div>
@@ -63,6 +63,7 @@ const props = defineProps<{
   sql?: string | null
   executionTimeMs?: number
   hideToolbar?: boolean
+  hideTitle?: boolean
   height?: number | string
 }>()
 
@@ -335,21 +336,28 @@ const canRender = computed(() => {
 })
 
 function buildRenderableSpec(): Record<string, any> | null {
-  if (props.spec) {
-    const spec = JSON.parse(JSON.stringify(props.spec))
-    if (
-      props.data?.length &&
-      (!spec.data || !Array.isArray(spec.data.values) || spec.data.values.length === 0)
-    ) {
-      spec.data = {
-        ...(spec.data || {}),
-        values: props.data,
-      }
+  const spec = props.spec
+    ? JSON.parse(JSON.stringify(props.spec))
+    : buildVegaSpec()
+
+  if (!spec) return null
+
+  if (
+    props.spec &&
+    props.data?.length &&
+    (!spec.data || !Array.isArray(spec.data.values) || spec.data.values.length === 0)
+  ) {
+    spec.data = {
+      ...(spec.data || {}),
+      values: props.data,
     }
-    return spec
   }
 
-  return buildVegaSpec()
+  if (props.hideTitle) {
+    delete spec.title
+  }
+
+  return spec
 }
 
 function toggleFullscreen() {
