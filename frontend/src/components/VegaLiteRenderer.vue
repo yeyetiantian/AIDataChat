@@ -5,7 +5,7 @@
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <div v-else-if="!props.spec && data.length === 0" class="empty-state">
+    <div v-else-if="!props.spec && data?.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>暂无数据</p>
     </div>
