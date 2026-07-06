@@ -188,7 +188,7 @@ order_by 中的 field 中的 by 必须使用**字段名**（如 "alarm_time"、"
 - values: 聚合值字段，aggregation: count/sum/avg/min/max/count_distinct
 - filters: WHERE 筛选条件，op: in/eq，value 传数组；可选 select_ts/select_order/filter_type
 - chart_type: bar/line/area/point/pie/radar（时间序列→line，类别对比→bar，占比→pie）
-- having: HAVING 子句过滤聚合后结果，每项 {field, op, value}
+- having: HAVING 子句过滤聚合后结果，每项 {{field, op, value}}
 - limit: 最大返回条数
 
 ### 每个 pivot_config 中的 values 必须有 id 字段（如 "val_1", "val_2"...）
