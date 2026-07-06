@@ -421,7 +421,7 @@ const stateData = reactive({
   // 排序 / Limit / HAVING / 图表类型
   sortField: [] as string[],
   sortDir: 'desc' as string,
-  limitVal: 10000,
+  limitVal: 1000,
   having: [] as { field: string; op: string; value: any }[],
   chartType: 'bar' as string,
   // 搜索
@@ -1011,7 +1011,7 @@ function handleClear() {
   stateData.values = []
   stateData.sortField = []
   stateData.sortDir = 'desc'
-  stateData.limitVal = 10000
+  stateData.limitVal = 1000
   stateData.having = []
   stateData.chartType = 'bar'
   latestRecommendedTop.value = null

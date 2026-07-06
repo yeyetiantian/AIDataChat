@@ -86,7 +86,7 @@ function createEmptyBoardConfig(): PivotConfig {
     legend: [],
     values: [],
     order_by: [],
-    limit: 10000,
+    limit: 1000,
     having: [],
     grand_total: false,
     subtotals: false,
@@ -98,6 +98,52 @@ function closeConfigPanel() {
   selectedBoardKey.value = null
 }
 
+function toFilterValueArray(value: unknown) {
+  if (Array.isArray(value)) return value
+  if (value == null || value === '') return []
+  if (typeof value === 'string' && value.includes(',')) {
+    return value
+      .split(',')
+      .map(item => item.trim())
+      .filter(item => item !== '')
+  }
+  return [value]
+}
+
+function toBoardPivotRequest(config: PivotConfig) {
+  return {
+    filters: (config.filters ?? []).map((filter, index) => ({
+      field: filter.field,
+      op: filter.op,
+      value: toFilterValueArray(filter.value),
+      select_ts: filter.select_ts ?? '',
+      select_order: filter.select_order ?? index + 1,
+      filter_type: filter.filter_type ?? '',
+    })),
+    axes: (config.axes ?? []).map(axis => ({
+      field: axis.field,
+      alias: axis.alias,
+      ...(axis.aggregation ? { aggregation: axis.aggregation } : {}),
+    })),
+    legend: (config.legend ?? []).map(item => ({
+      field: item.field,
+      alias: item.alias,
+    })),
+    values: (config.values ?? []).map(item => ({
+      id: item.id,
+      field: item.field,
+      aggregation: item.aggregation,
+      alias: item.alias,
+      ...(item.show_as ? { show_as: item.show_as } : {}),
+    })),
+    limit: config.limit ?? 1000,
+    having: config.having ?? [],
+    chart_type: config.chart_type ?? 'bar',
+    grand_total: config.grand_total ?? false,
+    subtotals: config.subtotals ?? false,
+  }
+}
+
 async function pivotApi(config: any) {
   if (!selectedBoard.value) {
     ElMessage.warning('请先选择左侧看板，再执行查询')
@@ -105,10 +151,11 @@ async function pivotApi(config: any) {
   }
 
   try {
-    const resp = await fetch('/api/pivot', {
+    const requestConfig = toBoardPivotRequest(config as PivotConfig)
+    const resp = await fetch('/api2/pivot/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
+      body: JSON.stringify(requestConfig),
     })
 
     if (!resp.ok) {
