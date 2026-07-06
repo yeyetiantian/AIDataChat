@@ -601,12 +601,6 @@ def _pivot_via_http(config: PivotConfig) -> dict:
 
     # 如果是私有 LLM，复用 auth headers 传给 pivot API
     headers = {"Content-Type": "application/json"}
-    if _is_private_provider():
-        try:
-            h = get_auth_headers()
-            headers["access_token"] = h.get("access_token", "")
-        except Exception:
-            pass
 
     resp = requests.post(url, json=payload, headers=headers, timeout=60)
     if resp.status_code != 200:
