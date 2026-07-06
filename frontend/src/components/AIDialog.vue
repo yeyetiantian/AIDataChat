@@ -42,7 +42,11 @@
                     </el-button>
                   </el-tooltip>
                   <el-tooltip content="保存到看板" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="confirmSave(chart)">
                       <el-icon :size="16"><PieChart /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
               </div>
               <div class="card-chart">
                 <div v-if="chart.error" class="chart-error">
@@ -51,7 +55,7 @@
                 </div>
                 <VegaLiteRenderer
                   v-else
-                  :ref="(el) => setRendererRef(getChartKey(i, ci), el)"
+                  :ref="(el) => setRendererRef(`chat_${ci}`, el)"
                   :data="chart.data"
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
