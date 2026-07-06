@@ -54,6 +54,7 @@ import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
 
 const props = defineProps<{
+  spec?: Record<string, any> | null
   data?: Record<string, any>[] | null
   config?: Record<string, any> | null
   chartType?: string
@@ -233,17 +234,18 @@ function buildVegaSpec(): Record<string, any> | null {
   const data = props.data
   const config = props.config
   if (!data || !data.length || !config) return null
-
+  const keys = Object.keys(data[0] || {}) || []
   const axes = config.axes || []
   const values = config.values || []
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
-  const axisField = axes[0]?.alias || axes[0]?.field || ''
+  const axisField = keys.includes(axes[0]?.alias) ? axes[0].alias : axes[0].field || ''
   const axisTitle = axes[0]?.alias || axisField
 
   if (chartType === 'radar') {
     return buildRadarSpec(data, axisField, axisTitle, values)
   }
+  
 
   if (chartType === 'point' && values.length >= 2) {
     return {
@@ -255,12 +257,12 @@ function buildVegaSpec(): Record<string, any> | null {
       mark: { type: 'point', tooltip: true, filled: true, size: 100 },
       encoding: {
         x: {
-          field: values[0].field,
+          field: keys.includes(values[0].alias) ? values[0].alias : values[0].field,
           type: 'quantitative',
           title: values[0].alias || values[0].field,
         },
         y: {
-          field: values[1].field,
+          field: keys.includes(values[1].alias) ? values[1].alias : values[1].field,
           type: 'quantitative',
           title: values[1].alias || values[1].field,
         },
@@ -361,6 +363,9 @@ function openSqlDialog() {
 
 async function renderChart() {
   const spec = buildVegaSpec()
+  // if (props.spec && props.spec.data && props.spec.data.length) {
+  //   spec = props.spec
+  // }
   if (!spec || !vegaContainer.value) return
 
   try {
