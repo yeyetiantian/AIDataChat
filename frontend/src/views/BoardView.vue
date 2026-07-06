@@ -152,7 +152,7 @@ async function pivotApi(config: any) {
 
   try {
     const requestConfig = toBoardPivotRequest(config as PivotConfig)
-    const resp = await fetch('/api2/pivot/query', {
+    const resp = await fetch('http://127.0.0.1:8080/api2/pivot/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestConfig),
