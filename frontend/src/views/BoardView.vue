@@ -42,7 +42,7 @@
       top="5vh"
       destroy-on-close
     >
-      <AIDialog @save="handleSaveToBoard" />
+      <AIDialog @save="handleSaveToBoard" @close="showAiDialog = false" />
     </el-dialog>
   </div>
 </template>

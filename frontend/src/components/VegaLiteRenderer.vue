@@ -5,7 +5,7 @@
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <div v-else-if="!props.spec && data?.length === 0" class="empty-state">
+    <div v-else-if="!props.spec && props.data?.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>暂无数据</p>
     </div>
@@ -63,6 +63,7 @@ const props = defineProps<{
   sql?: string | null
   executionTimeMs?: number
   hideToolbar?: boolean
+  hideTitle?: boolean
   height?: number | string
 }>()
 
@@ -96,11 +97,23 @@ function resolveFieldName(
   return item.field || alias
 }
 
+function hasTimeAxis(axis?: { aggregation?: string, group?: string }) {
+  const grouping = axis?.aggregation || axis?.group
+  return !!grouping && grouping !== 'source'
+}
+
+function resolveValueFieldNames(keys: string[], values: Array<Record<string, any>>) {
+  return values
+    .map(value => resolveFieldName(keys, value))
+    .filter((field): field is string => !!field)
+}
+
 function buildRadarSpec(
   data: Record<string, any>[],
   axisField: string,
   axisTitle: string,
   values: Array<Record<string, any>>,
+  keys: string[],
 ) {
   const dimensions = data
     .map(row => String(row[axisField] ?? ''))
@@ -109,7 +122,7 @@ function buildRadarSpec(
   if (!dimensions.length || values.length < 2) return null
 
   const maxValue = Math.max(
-    ...data.flatMap(row => values.map(value => Number(row[value.field] ?? 0))),
+    ...data.flatMap(row => values.map(value => Number(row[resolveFieldName(keys, value)] ?? 0))),
     1,
   )
 
@@ -117,10 +130,11 @@ function buildRadarSpec(
   const ringLevels = [0.25, 0.5, 0.75, 1]
 
   const polygonData = values.flatMap((value) => {
-    const metric = value.alias || value.field
+    const metricField = resolveFieldName(keys, value)
+    const metric = value.alias || metricField
     const points = data.map((row, index) => {
       const angle = angleStep * index - Math.PI / 2
-      const rawValue = Number(row[value.field] ?? 0)
+      const rawValue = Number(row[metricField] ?? 0)
       const ratio = maxValue === 0 ? 0 : rawValue / maxValue
       return {
         指标: metric,
@@ -255,9 +269,11 @@ function buildVegaSpec(): Record<string, any> | null {
   const chartType = props.chartType || 'bar'
   const axisField = resolveFieldName(keys, axes[0])
   const axisTitle = axes[0]?.alias || axisField
+  const isTemporalAxis = hasTimeAxis(axes[0])
+  const valueFieldNames = resolveValueFieldNames(keys, values)
 
   if (chartType === 'radar') {
-    return buildRadarSpec(data, axisField, axisTitle, values)
+    return buildRadarSpec(data, axisField, axisTitle, values, keys)
   }
   
 
@@ -271,12 +287,12 @@ function buildVegaSpec(): Record<string, any> | null {
       mark: { type: 'point', tooltip: true, filled: true, size: 100 },
       encoding: {
         x: {
-          field: resolveFieldName(keys, values[0]),
+          field: valueFieldNames[0],
           type: 'quantitative',
           title: values[0].alias || values[0].field,
         },
         y: {
-          field: resolveFieldName(keys, values[1]),
+          field: valueFieldNames[1],
           type: 'quantitative',
           title: values[1].alias || values[1].field,
         },
@@ -284,6 +300,32 @@ function buildVegaSpec(): Record<string, any> | null {
           ? { field: axisField, type: 'nominal', title: axisTitle }
           : undefined,
       },
+    }
+  }
+
+  if (values.length > 1 && chartType !== 'pie') {
+    const encoding: Record<string, any> = {
+      y: { field: 'value', type: 'quantitative', title: '数值' },
+      color: { field: 'key', type: 'nominal', title: '指标' },
+    }
+
+    if (axisField) {
+      encoding.x = {
+        field: axisField,
+        type: isTemporalAxis && ['line', 'area'].includes(chartType) ? 'temporal' : 'nominal',
+        title: axisTitle,
+      }
+    }
+
+    return {
+      $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+      title: '数据分析',
+      width: 'container',
+      height: props.height || 'container',
+      data: { values: data },
+      transform: [{ fold: valueFieldNames, as: ['key', 'value'] }],
+      mark: { type: chartType, tooltip: true, point: chartType === 'line' },
+      encoding,
     }
   }
 
@@ -314,7 +356,7 @@ function buildVegaSpec(): Record<string, any> | null {
       const lf = resolveFieldName(keys, legend[0])
       encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
     }
-    if (['line', 'area', 'point'].includes(chartType) && axes[0]?.aggregation && axes[0].aggregation !== 'source') {
+    if (['line', 'area', 'point'].includes(chartType) && isTemporalAxis) {
       encoding.x.type = 'temporal'
     }
   }
@@ -334,22 +376,97 @@ const canRender = computed(() => {
   return !!props.spec || !!(props.data && props.data.length > 0 && props.config)
 })
 
-function buildRenderableSpec(): Record<string, any> | null {
-  if (props.spec) {
-    const spec = JSON.parse(JSON.stringify(props.spec))
-    if (
-      props.data?.length &&
-      (!spec.data || !Array.isArray(spec.data.values) || spec.data.values.length === 0)
-    ) {
-      spec.data = {
-        ...(spec.data || {}),
-        values: props.data,
-      }
+function cloneSpec(spec: Record<string, any> | null | undefined) {
+  return spec ? JSON.parse(JSON.stringify(spec)) : null
+}
+
+function hydrateSpecData(spec: Record<string, any>) {
+  if (
+    props.data?.length &&
+    (!spec.data || !Array.isArray(spec.data.values) || spec.data.values.length === 0)
+  ) {
+    spec.data = {
+      ...(spec.data || {}),
+      values: props.data,
     }
-    return spec
   }
 
-  return buildVegaSpec()
+  return spec
+}
+
+function collectDerivedFields(transforms: any[] = []) {
+  const derivedFields = new Set<string>()
+
+  for (const transform of transforms) {
+    const asValue = transform?.as
+    if (Array.isArray(asValue)) {
+      asValue.forEach(field => {
+        if (typeof field === 'string' && field) derivedFields.add(field)
+      })
+      continue
+    }
+
+    if (typeof asValue === 'string' && asValue) {
+      derivedFields.add(asValue)
+    }
+  }
+
+  return derivedFields
+}
+
+function hasRequiredEncodingFields(
+  spec: Record<string, any>,
+  dataKeys: string[],
+  inheritedTransforms: any[] = [],
+) {
+  const transforms = [
+    ...inheritedTransforms,
+    ...(Array.isArray(spec.transform) ? spec.transform : []),
+  ]
+  const derivedFields = collectDerivedFields(transforms)
+
+  if (Array.isArray(spec.layer) && spec.layer.length > 0) {
+    return spec.layer.every(layer => hasRequiredEncodingFields(layer, dataKeys, transforms))
+  }
+
+  const encoding = spec.encoding || {}
+  const requiredFields = [encoding.y?.field, encoding.theta?.field]
+    .filter((field): field is string => typeof field === 'string' && field.length > 0)
+
+  if (!requiredFields.length) return true
+
+  return requiredFields.every(field => dataKeys.includes(field) || derivedFields.has(field))
+}
+
+function shouldFallbackToLocalSpec(spec: Record<string, any>, localSpec: Record<string, any> | null) {
+  if (!localSpec || !props.data?.length || !props.config) return false
+  const dataKeys = Object.keys(props.data[0] || {})
+  return !hasRequiredEncodingFields(spec, dataKeys)
+}
+
+function buildRenderableSpec(): Record<string, any> | null {
+  const localSpec = buildVegaSpec()
+  let spec = props.spec
+    ? cloneSpec(props.spec)
+    : cloneSpec(localSpec)
+
+  if (!spec) return null
+
+  spec = hydrateSpecData(spec)
+
+  // 后端 spec 有时会引用原字段名，和前端实际收到的别名列不一致。
+  // 这种情况下回退到前端用 data + config 重建的 spec，避免只显示坐标轴。
+  if (props.spec && shouldFallbackToLocalSpec(spec, localSpec)) {
+    spec = cloneSpec(localSpec)
+    if (!spec) return null
+    spec = hydrateSpecData(spec)
+  }
+
+  if (props.hideTitle) {
+    delete spec.title
+  }
+
+  return spec
 }
 
 function toggleFullscreen() {

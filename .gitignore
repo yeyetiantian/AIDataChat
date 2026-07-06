@@ -10,7 +10,7 @@ backend/routers/__pycache__/
 *.pyo
 backend/duckdb_temp/
 backend/agent_logs/*.json
-backend/data/
+backend/data/charts.json
 
 # ─── 打包产物 ───
 backend/build_temp/

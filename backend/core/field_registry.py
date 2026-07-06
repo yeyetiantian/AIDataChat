@@ -222,7 +222,7 @@ def get_schema_for_agent(top_signals: int = 60) -> str:
     parts = [
         "你的数据来源是明细宽表 WIDE_DETAIL，结构如下：",
         "",
-        "## 固定数据字段（12 个）",
+        "## 固定数据字段",
         "",
     ]
     for f in WIDE_DETAIL_FIXED_FIELDS:
@@ -242,7 +242,7 @@ def get_schema_for_agent(top_signals: int = 60) -> str:
 
     parts.append("")
     parts.append("## 数据来源")
-    parts.append("- 固定 12 字段 + 高频信号列已预构建在明细宽表 WIDE_DETAIL 中")
+    parts.append("- 固定字段 + 高频信号列已预构建在明细宽表 WIDE_DETAIL 中")
     parts.append("- 信号列名即 SIGNAL_NAME 值，按出现频率展开为独立列")
     parts.append("")
     parts.append("## 常用分析维度")
