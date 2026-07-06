@@ -22,22 +22,22 @@
 
           <!-- 图表显示 -->
           <div v-if="msg.charts && msg.charts.length" class="message-charts">
-            <div v-for="(chart, ci) in msg.charts" :key="chart.id" class="chart-card">
+            <div v-for="(chart, ci) in msg.charts" :key="getChartKey(i, ci)" class="chart-card">
               <div class="card-header">
                 <span class="card-title">{{ chart.title }}</span>
                 <div class="card-actions">
                   <el-tooltip content="保存图片" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(chart.id, chart.title)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(getChartKey(i, ci), chart.title)">
                       <el-icon :size="16"><Picture /></el-icon>
                     </el-button>
                   </el-tooltip>
                   <el-tooltip content="查看数据" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openChartData(chart.id)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openChartData(getChartKey(i, ci))">
                       <el-icon :size="16"><View /></el-icon>
                     </el-button>
                   </el-tooltip>
                   <el-tooltip content="全屏" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(chart.id)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(getChartKey(i, ci))">
                       <el-icon :size="16"><FullScreen /></el-icon>
                     </el-button>
                   </el-tooltip>
@@ -55,7 +55,7 @@
                 </div>
                 <VegaLiteRenderer
                   v-else
-                  :ref="(el) => setRendererRef(chart.id, el)"
+                  :ref="(el) => setRendererRef(getChartKey(i, ci), el)"
                   :spec="chart.vega_spec"
                   :data="chart.data"
                   :config="chart.pivot_config"
@@ -65,6 +65,12 @@
                   style="min-height: auto;"
                 />
               </div>
+            </div>
+            <div v-if="msg.charts.length > 1" class="batch-board-save-bar">
+              <el-button type="primary" size="small" class="batch-board-save-btn" :loading="isBatchSaving(i)" @click="saveMessageChartsToBoard(i, msg.charts)">
+                <el-icon><PieChart /></el-icon>
+                <span>批量保存到看板</span>
+              </el-button>
             </div>
           </div>
           <el-tag type="primary" v-for="sg in msg.suggestions" :key="sg" class="suggestion-tag" @click="onSuggest(sg)">
@@ -115,11 +121,11 @@
 
 <script setup lang="ts">
 import { ref, nextTick, watch } from 'vue'
-import { ChatLineSquare, Promotion } from '@element-plus/icons-vue'
-import { Edit, FullScreen, Picture, View, PieChart, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { ChatLineSquare, FullScreen, Picture, PieChart, Promotion, View, WarningFilled } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 import { useChatStore } from '@/stores/useChatStore'
-import { useChartStore, type SavedChart } from '@/stores/useChartStore'
+import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
 import type { PivotConfig } from '@/types'
 
 const chatStore = useChatStore()
@@ -127,6 +133,7 @@ const chartStore = useChartStore()
 
 const emit = defineEmits<{
   save: [chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>]
+  close: []
 }>()
 
 type ChartRendererHandle = {
@@ -136,6 +143,15 @@ type ChartRendererHandle = {
   exportSvg: (fileName?: string) => Promise<void>
 }
 
+type ChatChart = {
+  title?: string
+  error?: string
+  pivot_config?: PivotConfig | null
+  chart_type?: string
+  vega_spec?: Record<string, any> | null
+  data?: Record<string, any>[] | null
+}
+
 const input = ref('')
 const messagesRef = ref<HTMLElement | null>(null)
 const showSaveDialog = ref(false)
@@ -143,7 +159,8 @@ const saveTitle = ref('')
 const saveDesc = ref('')
 const saving = ref(false)
 const savingMessage = ref<any>(null)
-  const rendererRefs = ref<Record<number, ChartRendererHandle | null>>({})
+const rendererRefs = ref<Record<string, ChartRendererHandle | null>>({})
+const batchSaving = ref<Record<string, boolean>>({})
 
 const suggestions = [
   '各车辆触发次数占比',
@@ -158,7 +175,19 @@ function handleSend() {
   chatStore.sendMessage(msg)
 }
 
-function setRendererRef(id: number, instance: any) {
+function getMessageKey(messageIndex: number) {
+  return `message-${messageIndex}`
+}
+
+function getChartKey(messageIndex: number, chartIndex: number) {
+  return `${getMessageKey(messageIndex)}-chart-${chartIndex}`
+}
+
+function isBatchSaving(messageIndex: number) {
+  return !!batchSaving.value[getMessageKey(messageIndex)]
+}
+
+function setRendererRef(id: string, instance: any) {
   if (
     instance &&
     typeof instance.openDataDialog === 'function' &&
@@ -172,16 +201,76 @@ function setRendererRef(id: number, instance: any) {
   rendererRefs.value[id] = null
 }
 
-function openChartData(id: number) {
+function openChartData(id: string) {
   rendererRefs.value[id]?.openDataDialog()
 }
 
-function exportChartPng(id: number, title: string) {
+function exportChartPng(id: string, title: string) {
   void rendererRefs.value[id]?.exportPng(`${title || 'chart'}.png`)
 }
 
-function toggleChartFullscreen(id: number) {
+function toggleChartFullscreen(id: string) {
   rendererRefs.value[id]?.toggleFullscreen()
+}
+
+async function saveMessageChartsToBoard(messageIndex: number, charts: ChatChart[]) {
+  const messageKey = getMessageKey(messageIndex)
+  if (batchSaving.value[messageKey]) return
+
+  const savableCharts = charts.filter(chart => !chart?.error && chart?.pivot_config)
+
+  if (!savableCharts.length) {
+    ElMessage.warning('当前没有可保存到看板的图表')
+    return
+  }
+
+  batchSaving.value[messageKey] = true
+
+  try {
+    await chartStore.fetchCharts()
+
+    if (chartStore.error) {
+      ElMessage.warning(chartStore.error || '加载看板失败')
+      return
+    }
+
+    const remainingSlots = Math.max(MAX_BOARD_CHARTS - chartStore.charts.length, 0)
+    if (savableCharts.length > remainingSlots) {
+      ElMessage.warning(`看板剩余 ${remainingSlots} 个位置，无法批量保存 ${savableCharts.length} 个图表`)
+      return
+    }
+
+    let savedCount = 0
+
+    for (const [index, chart] of savableCharts.entries()) {
+      const saved = await chartStore.saveChart(
+        (chart.title || `图表 ${index + 1}`).trim() || `图表 ${index + 1}`,
+        (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
+        '',
+        chart.chart_type || 'bar',
+        chart.vega_spec || null,
+        chart.data || null,
+      )
+
+      if (!saved) {
+        const message = chartStore.error || '保存失败'
+        if (savedCount > 0) {
+          ElMessage.warning(`已保存 ${savedCount} 个图表，剩余保存失败：${message}`)
+          return
+        }
+
+        ElMessage.warning(message)
+        return
+      }
+
+      savedCount += 1
+    }
+
+    ElMessage.success(`已批量保存 ${savedCount} 个图表到看板`)
+    emit('close')
+  } finally {
+    batchSaving.value[messageKey] = false
+  }
 }
 
 function onSuggest(text: string) {
@@ -443,5 +532,27 @@ watch(() => chatStore.messages.length, async () => {
   font-size: 13px;
   background: #fafafa;
   border-radius: 8px;
+}
+
+.batch-board-save-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  margin-bottom: 18px;
+}
+
+.batch-board-save-btn {
+  gap: 6px;
+  background: #2f6bcb;
+  border-color: #2f6bcb;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(47, 107, 203, 0.18);
+}
+
+.batch-board-save-btn:hover,
+.batch-board-save-btn:focus {
+  background: #2559b3;
+  border-color: #2559b3;
+  color: #ffffff;
 }
 </style>
