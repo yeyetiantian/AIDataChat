@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional, TypedDict
 
 from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
@@ -167,13 +168,13 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 单图表示例（默认行为）：
 {{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }}
 ]}}
 
 多图表示例（仅当用户明确要求时才使用）：
 {{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }},
-  {{ "title": "各规则类型报警次数", "pivot_config": {{ "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}] }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }},
+  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }}
 ]}}
 
 **修改已有图表**：当用户要求修改（如"改成饼图""只看SUV""按天统计"），只修改当前对话中的**最后一个图表配置**，保持 charts 数量不变。
@@ -182,12 +183,13 @@ suggestions 字段必须为空列表（无需生成追问）。
 order_by 中的 field 中的 by 必须使用**字段名**（如 "alarm_time"、"vehicle_type"），**不要使用 value 的 id**（如 "val_1"、"val_2"）。
 
 ### 图表字段说明
-- axes: 横轴/行维度字段（GROUP BY）
+- axes: 横轴/行维度字段（GROUP BY），时间字段可设 aggregation: day/month/year
 - legend: 图例字段（PIVOT ON，用于多系列对比）
 - values: 聚合值字段，aggregation: count/sum/avg/min/max/count_distinct
-- filters: WHERE 筛选条件，op: =/!=/>/>=/</<=/between/in/like
+- filters: WHERE 筛选条件，op: in/eq，value 传数组；可选 select_ts/select_order/filter_type
 - chart_type: bar/line/area/point/pie/radar（时间序列→line，类别对比→bar，占比→pie）
-- group: 时间粒度 year/quarter/month/week/day/hour（仅时间字段）
+- having: HAVING 子句过滤聚合后结果，每项 {{field, op, value}}
+- limit: 最大返回条数
 
 ### 每个 pivot_config 中的 values 必须有 id 字段（如 "val_1", "val_2"...）
 缺少 id 会导致校验不通过，需要重新生成。
@@ -398,25 +400,24 @@ def analyze_node(state: AgentState) -> AgentState:
     try:
         structured_llm = _get_structured_llm()
 
-        messages = [
-            {"role": "system", "content": _get_base_system_prompt()},
-        ]
+        # 合并所有 system 内容为一条（私有 LLM 如 Qwen 只允许一条 system 消息且在位置 0）
+        system_parts = [_get_base_system_prompt()]
 
-        # 如果是校验重试，追加校验失败的反馈信息
         if state.get("analyze_retry_count", 0) > 0 and state.get("validation_error"):
-            messages.append({
-                "role": "system",
-                "content": f"注意：上一次生成的配置在校验中未通过，请根据以下反馈修正：\n{state['validation_error']}\n请重新生成符合要求的配置。",
-            })
+            system_parts.append(
+                f"注意：上一次生成的配置在校验中未通过，请根据以下反馈修正：\n{state['validation_error']}\n请重新生成符合要求的配置。"
+            )
 
-        # 如果是 SQL 执行失败重试，追加错误反馈
         if state.get("execute_retry_count", 0) > 0 and state.get("sql_error"):
-            messages.append({
-                "role": "system",
-                "content": f"注意：上一次生成的配置在 SQL 查询时出错：\n{state['sql_error']}\n请检查字段名、值 ID 引用和列名是否正确，重新生成配置。",
-            })
+            system_parts.append(
+                f"注意：上一次生成的配置在 SQL 查询时出错：\n{state['sql_error']}\n请检查字段名、值 ID 引用和列名是否正确，重新生成配置。"
+            )
 
-        for h in (state.get("conversation_history") or []):
+        # 先构建基础消息（不含 format instructions），供 structured_llm 使用
+        base_system = "\n\n".join(system_parts)
+        messages = [{"role": "system", "content": base_system}]
+        history = [h for h in (state.get("conversation_history") or []) if h.get("role") != "system"]
+        for h in history:
             messages.append(h)
         messages.append({"role": "user", "content": state["user_message"]})
 
@@ -430,66 +431,59 @@ def analyze_node(state: AgentState) -> AgentState:
                     "raw_output": response.model_dump_json()[:1000],
                 })
             except Exception:
-                logger.warning("StructuredOutput 调用失败，回退到手动解析")
+                logger.warning("StructuredOutput 调用失败，使用 PydanticOutputParser 兜底")
                 response = None
 
         if response is None:
-            # 回退：手动 JSON 解析
+            # 兜底：PydanticOutputParser（LangChain 内置方案，兼容所有 LLM）
+            parser = PydanticOutputParser(pydantic_object=AgentOutput)
+            format_instructions = parser.get_format_instructions()
+
+            # 将格式说明追加到 system prompt 中
+            messages[0] = {"role": "system", "content": f"{base_system}\n\n## 输出格式\n{format_instructions}"}
+
             raw_llm = _get_llm()
             raw_resp = raw_llm.invoke(messages)
-            content = raw_resp.content.strip()
+            raw_content = raw_resp.content.strip()
 
             trace.append({
-                "step": "llm_raw_response",
+                "step": "llm_pydantic_parser",
                 "timestamp": datetime.now().isoformat(),
-                "raw_output": content[:1000],
+                "raw_output": raw_content[:1000],
             })
 
-            # 尝试多种方式解析 JSON
-            import re
-            result = None
-
-            # 方式1: 提取 ```json ... ``` 或 ``` ... ``` 中的内容
-            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
-            if json_match:
-                raw = json_match.group(1).strip()
-                # 处理 LLM 输出的双花括号（{{ → {, }} → }）
-                result = _try_parse_json(raw)
-
-            # 方式2: 直接解析完整内容（处理双花括号）
-            if result is None:
-                result = _try_parse_json(content)
-
-            # 方式3: 找到第一个 { 或 {{ 开始，最后一个 } 或 }} 结束
-            if result is None:
-                json_str = _extract_json_fragment(content)
-                if json_str:
-                    result = _try_parse_json(json_str)
-
-            if result is None:
-                raise ValueError(f"LLM 返回无法解析为 JSON: {content[:300]}")
-
-            # 手动构建 AgentOutput（兼容单图/多图两种格式）
-            raw_charts = result.get("charts")
-            if isinstance(raw_charts, list) and len(raw_charts) > 0:
-                # 逐图表标准化 pivot_config
-                for c in raw_charts:
-                    if isinstance(c, dict) and c.get("pivot_config"):
-                        _normalize_pivot(c["pivot_config"])
-                response = AgentOutput(
-                    intent=result.get("intent", "chart"),
-                    reply=result.get("reply", ""),
-                    charts=raw_charts,
-                    suggestions=result.get("suggestions", []),
-                )
-            else:
-                response = AgentOutput(
-                    intent=result.get("intent", "chart"),
-                    reply=result.get("reply", ""),
-                    pivot_config=_normalize_pivot(result.get("pivot_config")),
-                    chart_type=result.get("chart_type"),
-                    suggestions=result.get("suggestions", []),
-                )
+            try:
+                response = parser.parse(raw_content)
+            except Exception as parse_err:
+                logger.error("PydanticOutputParser 解析失败: %s", parse_err)
+                # 最后尝试带标准化的手动解析
+                result = _try_parse_json(raw_content)
+                if result is None:
+                    frag = _extract_json_fragment(raw_content)
+                    if frag:
+                        result = _try_parse_json(frag)
+                if result is None:
+                    raise ValueError(f"LLM 返回无法解析: {raw_content[:200]}")
+                # 手动构建 AgentOutput
+                raw_charts = result.get("charts")
+                if isinstance(raw_charts, list) and len(raw_charts) > 0:
+                    for c in raw_charts:
+                        if isinstance(c, dict) and c.get("pivot_config"):
+                            _normalize_pivot(c["pivot_config"])
+                    response = AgentOutput(
+                        intent=result.get("intent", "chart"),
+                        reply=result.get("reply", ""),
+                        charts=raw_charts,
+                        suggestions=result.get("suggestions", []),
+                    )
+                else:
+                    response = AgentOutput(
+                        intent=result.get("intent", "chart"),
+                        reply=result.get("reply", ""),
+                        pivot_config=_normalize_pivot(result.get("pivot_config")),
+                        chart_type=result.get("chart_type"),
+                        suggestions=result.get("suggestions", []),
+                    )
 
         if response.intent == "chat":
             state["intent"] = "chat"
@@ -701,8 +695,15 @@ def format_reply_node(state: AgentState) -> AgentState:
 
     charts = state.get("charts", []) or []
     total_rows = sum(len(ch.get("data", []) or []) for ch in charts)
+    all_errors = [ch.get("error") for ch in charts if ch.get("error")]
+
     if total_rows > 0:
         state["reply"] += f"\n\n共查询到 {total_rows} 条结果。"
+    elif all_errors and len(all_errors) == len(charts):
+        # 全部图表都失败时，回复中加入友好提示，不暴露原始技术错误
+        state["reply"] = (state.get("reply") or "") + "\n\n图表查询失败，请尝试换个方式描述分析需求。"
+        if not state.get("error"):
+            state["error"] = "; ".join(all_errors[:3])
 
     log_path = _save_trace_log(state)
     trace.append({"step": "log_saved", "path": log_path})
@@ -758,10 +759,8 @@ def build_agent() -> Any:
         },
     )
 
-    # execute 条件路由：SQL 失败 → analyze 重试（最多 2 次）
+    # execute 条件路由：执行失败直接走 format_reply，不重试大模型
     def _route_after_execute(state: AgentState) -> str:
-        if state.get("sql_error") and state.get("execute_retry_count", 0) <= 2:
-            return "analyze"
         return "format_reply"
 
     workflow.add_conditional_edges(

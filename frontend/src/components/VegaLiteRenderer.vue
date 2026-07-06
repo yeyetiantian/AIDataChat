@@ -1,11 +1,16 @@
 <template>
   <div class="vega-renderer" :class="{ 'is-fullscreen': isFullscreen }" ref="chartContainer">
-    <div v-if="!canRender" class="empty-state">
+    <div v-if="!data" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <template v-else>
+    <div v-else-if="data.length === 0" class="empty-state">
+      <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
+      <p>暂无数据</p>
+    </div>
+
+    <template v-else-if="canRender">
       <!-- 工具栏 -->
       <div v-if="!props.hideToolbar" class="chart-toolbar">
         <span v-if="props.executionTimeMs != null" class="exec-time">
@@ -49,6 +54,7 @@ import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
 
 const props = defineProps<{
+  spec?: Record<string, any> | null
   data?: Record<string, any>[] | null
   config?: Record<string, any> | null
   chartType?: string
@@ -228,17 +234,18 @@ function buildVegaSpec(): Record<string, any> | null {
   const data = props.data
   const config = props.config
   if (!data || !data.length || !config) return null
-
+  const keys = Object.keys(data[0] || {}) || []
   const axes = config.axes || []
   const values = config.values || []
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
-  const axisField = axes[0]?.alias || axes[0]?.field || ''
+  const axisField = keys.includes(axes[0]?.alias) ? axes[0].alias : axes[0].field || ''
   const axisTitle = axes[0]?.alias || axisField
 
   if (chartType === 'radar') {
     return buildRadarSpec(data, axisField, axisTitle, values)
   }
+  
 
   if (chartType === 'point' && values.length >= 2) {
     return {
@@ -250,12 +257,12 @@ function buildVegaSpec(): Record<string, any> | null {
       mark: { type: 'point', tooltip: true, filled: true, size: 100 },
       encoding: {
         x: {
-          field: values[0].field,
+          field: keys.includes(values[0].alias) ? values[0].alias : values[0].field,
           type: 'quantitative',
           title: values[0].alias || values[0].field,
         },
         y: {
-          field: values[1].field,
+          field: keys.includes(values[1].alias) ? values[1].alias : values[1].field,
           type: 'quantitative',
           title: values[1].alias || values[1].field,
         },
@@ -356,6 +363,9 @@ function openSqlDialog() {
 
 async function renderChart() {
   const spec = buildVegaSpec()
+  // if (props.spec && props.spec.data && props.spec.data.length) {
+  //   spec = props.spec
+  // }
   if (!spec || !vegaContainer.value) return
 
   try {

@@ -15,7 +15,7 @@ function createBaseConfig(partial: Partial<PivotConfig>): PivotConfig {
     legend: [],
     values: [],
     order_by: [],
-    limit: 10000,
+    limit: 1000,
     having: [],
     grand_total: false,
     subtotals: false,

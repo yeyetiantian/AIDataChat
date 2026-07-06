@@ -440,7 +440,7 @@ const stateData = reactive({
   // 排序 / Limit / HAVING / 图表类型
   sortField: [] as string[],
   sortDir: 'desc' as string,
-  limitVal: 10000,
+  limitVal: 1000,
   having: [] as { field: string; op: string; value: any }[],
   chartType: 'bar' as string,
   // 搜索
@@ -598,7 +598,7 @@ function isResultViewField(field: string): boolean {
   return (RESULT_VIEW_FIELDS as readonly string[]).includes(field)
 }
 
-function getFilterType(field: string): FilterItem['filter_type'] {
+function getFilterType(field: string): string {
   if (isTimeFilterField(field)) return 'date'
   if (isNumericFilterField(field)) return 'number'
   return 'string'
@@ -1128,7 +1128,7 @@ function handleClear() {
   stateData.values = []
   stateData.sortField = []
   stateData.sortDir = 'desc'
-  stateData.limitVal = 10000
+  stateData.limitVal = 1000
   stateData.having = []
   stateData.chartType = 'bar'
   signalFields.value = []

@@ -7,9 +7,9 @@ export interface FilterItem {
   alias?: string
   select_ts?: string
   select_order?: number
-  filter_type?: 'string' | 'number' | 'date'
   /** 是否来自右侧信号列表 */
   isSignal?: boolean
+  filter_type?: string
 }
 
 export interface AxisItem {

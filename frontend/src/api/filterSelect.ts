@@ -1,6 +1,6 @@
 import type { FilterItem } from '@/types'
 
-export const FILTER_SELECT_API = 'http://127.0.0.1:8080/api/pivot/select'
+export const FILTER_SELECT_API = 'http://127.0.0.1:8080/api2/pivot/select'
 
 export interface FilterSelectDropdownItem {
   id: string
@@ -11,9 +11,9 @@ export interface FilterSelectPayloadItem {
   field: string
   op: string
   value: unknown[]
-  select_ts: string
-  select_order: number
-  filter_type: string
+  select_ts?: string
+  select_order?: number
+  filter_type?: string
 }
 
 export interface FilterSelectRequest {
