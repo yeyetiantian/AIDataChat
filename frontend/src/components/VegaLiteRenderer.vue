@@ -1,11 +1,11 @@
 <template>
   <div class="vega-renderer" :class="{ 'is-fullscreen': isFullscreen }" ref="chartContainer">
-    <div v-if="!data" class="empty-state">
+    <div v-if="!hasRenderableSource" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <div v-else-if="data.length === 0" class="empty-state">
+    <div v-else-if="!props.spec && data?.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>暂无数据</p>
     </div>
@@ -81,6 +81,20 @@ const displayColumns = computed(() => {
   if (props.data && props.data.length) return Object.keys(props.data[0])
   return []
 })
+
+const hasRenderableSource = computed(() => {
+  return !!props.spec || !!props.data
+})
+
+function resolveFieldName(
+  keys: string[],
+  item?: { field?: string, alias?: string },
+) {
+  if (!item) return ''
+  const alias = item.alias || ''
+  if (alias && keys.includes(alias)) return alias
+  return item.field || alias
+}
 
 function buildRadarSpec(
   data: Record<string, any>[],
@@ -239,7 +253,7 @@ function buildVegaSpec(): Record<string, any> | null {
   const values = config.values || []
   const legend = config.legend || []
   const chartType = props.chartType || 'bar'
-  const axisField = keys.includes(axes[0]?.alias) ? axes[0].alias : axes[0].field || ''
+  const axisField = resolveFieldName(keys, axes[0])
   const axisTitle = axes[0]?.alias || axisField
 
   if (chartType === 'radar') {
@@ -257,12 +271,12 @@ function buildVegaSpec(): Record<string, any> | null {
       mark: { type: 'point', tooltip: true, filled: true, size: 100 },
       encoding: {
         x: {
-          field: keys.includes(values[0].alias) ? values[0].alias : values[0].field,
+          field: resolveFieldName(keys, values[0]),
           type: 'quantitative',
           title: values[0].alias || values[0].field,
         },
         y: {
-          field: keys.includes(values[1].alias) ? values[1].alias : values[1].field,
+          field: resolveFieldName(keys, values[1]),
           type: 'quantitative',
           title: values[1].alias || values[1].field,
         },
@@ -285,7 +299,7 @@ function buildVegaSpec(): Record<string, any> | null {
     yField = Object.keys(data[0]).find(k => !axisKeys.has(k)) || ''
     yTitle = values[0]?.alias || yField
   } else {
-    yField = values[0]?.field || ''
+    yField = resolveFieldName(keys, values[0])
     yTitle = values[0]?.alias || yField
   }
 
@@ -297,7 +311,7 @@ function buildVegaSpec(): Record<string, any> | null {
     if (xField) encoding.x = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.y = { field: yField, type: 'quantitative', title: yTitle }
     if (legend.length) {
-      const lf = legend[0].field
+      const lf = resolveFieldName(keys, legend[0])
       encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
     }
     if (['line', 'area', 'point'].includes(chartType) && axes[0]?.aggregation && axes[0].aggregation !== 'source') {
@@ -317,8 +331,26 @@ function buildVegaSpec(): Record<string, any> | null {
 }
 
 const canRender = computed(() => {
-  return props.data && props.data.length > 0 && props.config
+  return !!props.spec || !!(props.data && props.data.length > 0 && props.config)
 })
+
+function buildRenderableSpec(): Record<string, any> | null {
+  if (props.spec) {
+    const spec = JSON.parse(JSON.stringify(props.spec))
+    if (
+      props.data?.length &&
+      (!spec.data || !Array.isArray(spec.data.values) || spec.data.values.length === 0)
+    ) {
+      spec.data = {
+        ...(spec.data || {}),
+        values: props.data,
+      }
+    }
+    return spec
+  }
+
+  return buildVegaSpec()
+}
 
 function toggleFullscreen() {
   const el = chartContainer.value
@@ -362,10 +394,7 @@ function openSqlDialog() {
 }
 
 async function renderChart() {
-  const spec = buildVegaSpec()
-  // if (props.spec && props.spec.data && props.spec.data.length) {
-  //   spec = props.spec
-  // }
+  const spec = buildRenderableSpec()
   if (!spec || !vegaContainer.value) return
 
   try {
@@ -423,7 +452,12 @@ async function exportSvg(fileName = 'chart.svg') {
 }
 
 watch(
-  () => props.data ? JSON.stringify(props.data) + '|' + JSON.stringify(props.config) + '|' + (props.chartType || '') : null,
+  () => [
+    props.spec ? JSON.stringify(props.spec) : null,
+    props.data ? JSON.stringify(props.data) : null,
+    props.config ? JSON.stringify(props.config) : null,
+    props.chartType || '',
+  ].join('|'),
   async () => {
     scheduleRender()
   },

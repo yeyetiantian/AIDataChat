@@ -59,6 +59,7 @@
           <VegaLiteRenderer
             v-else
             :ref="(el) => setRendererRef(chart.id, el)"
+            :spec="chart.vega_spec"
             :data="chart.data"
             :config="chart.pivot_config"
             :chart-type="chart.chart_type"
@@ -99,6 +100,7 @@ type DraftChart = {
   description: string
   pivot_config: Record<string, any> | null
   chart_type: string
+  vega_spec?: Record<string, any> | null
   data?: Record<string, any>[] | null
   created_at: string
   updated_at: string
@@ -112,6 +114,7 @@ type PlaceholderChart = {
   description: string
   pivot_config: null
   chart_type: 'bar'
+  vega_spec?: null
   data: null
   created_at: ''
   updated_at: ''
@@ -184,7 +187,7 @@ function getCardKey(chart: BoardCard) {
 }
 
 function hasRenderableChart(chart: BoardCard) {
-  return !!(chart.data?.length && chart.pivot_config)
+  return !!(chart.vega_spec || (chart.data?.length && chart.pivot_config))
 }
 
 function handleDelete(id: number) {

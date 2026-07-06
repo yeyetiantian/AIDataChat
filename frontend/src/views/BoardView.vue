@@ -180,6 +180,7 @@ async function pivotApi(config: any) {
     await chartStore.updateChart(selectedBoard.value.id, {
       pivot_config: config,
       chart_type: config?.chart_type || 'bar',
+      vega_spec: result.vega_spec || null,
       data: result.data || [],
     })
   } catch (e: any) {
@@ -188,7 +189,14 @@ async function pivotApi(config: any) {
 }
 
 async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>) {
-  const saved = await chartStore.saveChart(chart.title, chart.pivot_config as PivotConfig, chart.description || '', chart.chart_type, chart.data)
+  const saved = await chartStore.saveChart(
+    chart.title,
+    chart.pivot_config as PivotConfig,
+    chart.description || '',
+    chart.chart_type,
+    chart.vega_spec || null,
+    chart.data,
+  )
   if (!saved) {
     ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
     return
@@ -202,6 +210,7 @@ async function createEmptyBoard() {
     createEmptyBoardConfig(),
     '',
     'bar',
+    null,
     null,
   )
 
@@ -311,6 +320,7 @@ async function handleMockDataRequest() {
       mockChart.pivotConfig,
       mockChart.description,
       mockChart.chartType,
+      null,
       mockChart.data,
     )
 

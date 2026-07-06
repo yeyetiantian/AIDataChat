@@ -55,6 +55,7 @@
                 </div>
                 <VegaLiteRenderer
                   v-else
+                  :spec="chart.vega_spec"
                   :data="chart.data"
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
@@ -204,6 +205,7 @@ async function confirmSave() {
       description: saveDesc.value,
       pivot_config: (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
       chart_type: chart.chart_type || 'bar',
+      vega_spec: chart.vega_spec || null,
       data: chart.data || null,
     })
     showSaveDialog.value = false
