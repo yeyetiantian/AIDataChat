@@ -10,7 +10,9 @@ export interface FilterItem {
 export interface AxisItem {
   field: string
   alias?: string
-  group?: 'raw' | 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
+  /** 时间字段粒度（仅时间类型轴使用） */
+  aggregation?: 'source' | 'day' | 'week' | 'month' | 'year' | 'quarter' | 'hour'
+  group?: 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
   sort?: 'asc' | 'desc'
 }
 

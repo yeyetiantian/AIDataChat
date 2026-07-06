@@ -199,12 +199,12 @@
                 <span class="zone-item-field">{{ item.alias || item.field }}</span>
                 <el-select
                   v-if="isTimeFilterField(item.field)"
-                  :model-value="item.group ?? 'raw'"
+                  :model-value="item.aggregation ?? 'source'"
                   size="small"
                   style="width:68px"
-                  @update:model-value="(v) => onAxisGroupChange(item, v)"
+                  @update:model-value="(v) => onAxisAggregationChange(item, v)"
                 >
-                  <el-option label="原始值" value="raw" />
+                  <el-option label="原始值" value="source" />
                   <el-option label="天" value="day" />
                   <el-option label="周" value="week" />
                   <el-option label="月" value="month" />
@@ -624,15 +624,15 @@ function onShowAsChange(index: number, val: string) {
   }
 }
 
-function ensureAxisGroup(item: AxisItem): AxisItem {
-  if (isTimeFilterField(item.field)) {
-    return { ...item, group: item.group ?? 'raw' }
-  }
-  return item
+function ensureAxisAggregation(item: AxisItem): AxisItem {
+  if (!isTimeFilterField(item.field)) return item
+  const aggregation = item.aggregation ?? (item.group as AxisItem['aggregation']) ?? 'source'
+  const { group, ...rest } = item
+  return { ...rest, aggregation }
 }
 
-function onAxisGroupChange(item: AxisItem, val: string) {
-  item.group = (val || 'raw') as AxisItem['group']
+function onAxisAggregationChange(item: AxisItem, val: string) {
+  item.aggregation = (val || 'source') as AxisItem['aggregation']
 }
 
 function onDragStart(event: DragEvent, field: FieldDef) {
@@ -662,7 +662,7 @@ function onDrop(event: DragEvent, zone: ZoneType) {
     stateData.filters.push(newFilter)
   } else if (zone === 'axes') {
     const axisItem: AxisItem = { field: field.name, alias: field.alias_cn, sort: 'asc' }
-    if (isTimeFilterField(field.name)) axisItem.group = 'raw'
+    if (isTimeFilterField(field.name)) axisItem.aggregation = 'source'
     stateData.axes.push(axisItem)
   } else if (zone === 'legend') {
     stateData.legend.push({ field: field.name, alias: field.alias_cn })
@@ -691,14 +691,12 @@ function buildPivotConfig(): PivotConfig {
   return {
     filters: stateData.filters.map(serializeFilterForApi),
     axes: stateData.axes.map(a => {
-      const axis: { field: string; alias?: string; group?: AxisItem['group'] } = {
+      const axis: { field: string; alias?: string; aggregation?: AxisItem['aggregation'] } = {
         field: a.field,
         alias: a.alias,
       }
       if (isTimeFilterField(a.field)) {
-        axis.group = a.group ?? 'raw'
-      } else if (a.group) {
-        axis.group = a.group
+        axis.aggregation = a.aggregation ?? 'source'
       }
       return axis
     }),
@@ -827,7 +825,7 @@ defineExpose({
         if (isDropdownFilterField(f.field)) loadFilterDropdown(f.field)
       })
     }
-    if (config.axes) stateData.axes = config.axes.map(ensureAxisGroup)
+    if (config.axes) stateData.axes = config.axes.map(ensureAxisAggregation)
     if (config.legend) stateData.legend = config.legend
     if (config.values) stateData.values = config.values
     if (config.chart_type) stateData.chartType = config.chart_type

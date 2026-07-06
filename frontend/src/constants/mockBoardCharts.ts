@@ -46,7 +46,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
       description: '模拟数据: 近 7 天报警数量变化',
       chartType: 'line',
       pivotConfig: createBaseConfig({
-        axes: [{ field: 'alarm_time', alias: '报警时间', group: 'day' }],
+        axes: [{ field: 'alarm_time', alias: '报警时间', aggregation: 'day' }],
         values: [{ id: 'val_1', field: 'alarm_time', aggregation: 'count', alias: '报警次数' }],
         order_by: [{ field: 'alarm_time', direction: 'asc' }],
       }),
@@ -65,7 +65,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
       description: '模拟数据: 每日持续时间总量变化',
       chartType: 'area',
       pivotConfig: createBaseConfig({
-        axes: [{ field: 'condition_met_time', alias: '前置条件满足时间', group: 'day' }],
+        axes: [{ field: 'condition_met_time', alias: '前置条件满足时间', aggregation: 'day' }],
         values: [{ id: 'val_1', field: 'duration_sec', aggregation: 'sum', alias: '持续时间(秒)' }],
         order_by: [{ field: 'condition_met_time', direction: 'asc' }],
       }),
