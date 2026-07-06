@@ -49,14 +49,18 @@
       <div class="section-body config-body">
         <!-- 四象限拖拽区 2x2 网格 -->
           <!-- 筛选器 -->
-          <div class="zone-card" @dragover.prevent @drop="onDrop($event, 'filters')">
+          <div class="zone-card zone-card--filters" @dragover.prevent @drop="onDrop($event, 'filters')">
             <div class="zone-label">
               <el-icon size="14"><Filter /></el-icon> 筛选器 <el-tag v-if="filters.length" size="small" round>{{ filters.length }}</el-tag>
             </div>
             <div class="zone-body" :class="{ empty: filters.length === 0 }">
               <div v-if="filters.length === 0" class="zone-placeholder">拖入字段</div>
-              <div v-for="(item, i) in filters" :key="i" class="zone-item">
-                <span class="zone-item-field">{{ item.alias || item.field }}</span>
+              <div
+                v-for="(item, i) in filters" :key="i"
+                class="zone-item"
+                :class="{ 'zone-item--date-between': isDateBetweenFilter(item) }"
+              >
+                <span class="zone-item-field" :title="item.alias || item.field">{{ item.alias || item.field }}</span>
                 <template v-if="isTimeFilterField(item.field)">
                   <el-select
                     :model-value="item.op"
@@ -80,27 +84,19 @@
                     :disabled-date="getDisabledDateForField(item.field)"
                     @change="() => onFilterFieldChange(item)"
                   />
-                  <div v-else-if="Array.isArray(item.value)" class="between-inputs">
+                  <div v-else-if="Array.isArray(item.value)" class="zone-item-date-range">
                     <el-date-picker
-                      v-model="item.value[0]"
-                      type="date"
+                      :model-value="getDateRangeFilterValue(item)"
+                      type="daterange"
                       value-format="YYYY-MM-DD"
+                      range-separator="至"
                       size="small"
-                      class="filter-date-picker-sm"
-                      placeholder="开始"
+                      style="width:100%"
+                      class="filter-date-range-picker"
+                      start-placeholder="开始"
+                      end-placeholder="结束"
                       :disabled-date="getDisabledDateForField(item.field)"
-                      @change="() => onFilterFieldChange(item)"
-                    />
-                    <span>~</span>
-                    <el-date-picker
-                      v-model="item.value[1]"
-                      type="date"
-                      value-format="YYYY-MM-DD"
-                      size="small"
-                      class="filter-date-picker-sm"
-                      placeholder="结束"
-                      :disabled-date="getDisabledDateForField(item.field)"
-                      @change="() => onFilterFieldChange(item)"
+                      @update:model-value="(val) => onDateRangeFilterChange(item, val)"
                     />
                   </div>
                 </template>
@@ -574,6 +570,10 @@ function isTimeFilterField(field: string): boolean {
   return (TIME_FILTER_FIELDS as readonly string[]).includes(field)
 }
 
+function isDateBetweenFilter(item: FilterItem): boolean {
+  return isTimeFilterField(item.field) && item.op === 'between' && Array.isArray(item.value)
+}
+
 function isNumericFilterField(field: string): boolean {
   return (NUMERIC_FILTER_FIELDS as readonly string[]).includes(field)
 }
@@ -905,6 +905,19 @@ function onNumericFilterOpChange(item: FilterItem, op: string | number) {
 
 function onTimeFilterOpChange(item: FilterItem, op: string | number) {
   onRangeFilterOpChange(item, op)
+}
+
+function getDateRangeFilterValue(item: FilterItem): [string, string] | null {
+  if (!Array.isArray(item.value)) return null
+  const [start, end] = item.value
+  if (!start && !end) return null
+  if (start && end) return [String(start), String(end)]
+  return null
+}
+
+function onDateRangeFilterChange(item: FilterItem, val: [string, string] | null) {
+  item.value = val && val.length === 2 ? val : ['', '']
+  onFilterFieldChange(item)
 }
 
 function addHaving() {
@@ -1338,6 +1351,11 @@ onBeforeUnmount(() => {
   height: 100px;
 }
 
+.zone-card--filters {
+  height: auto;
+  min-height: 100px;
+}
+
 .config-section .section-body {
   padding: 6px 8px 8px;
 }
@@ -1384,14 +1402,65 @@ onBeforeUnmount(() => {
   background: #f0f9eb;
   border-radius: 4px;
   font-size: 12px;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .zone-item-field {
+  flex: 0 1 88px;
+  max-width: 120px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 500;
   color: #303133;
-  min-width: 60px;
   font-size: 12px;
+}
+
+.zone-item > .el-button {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.zone-item--date-between {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 4px;
+}
+
+.zone-item--date-between .zone-item-field {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+}
+
+.zone-item--date-between > .el-select {
+  order: 2;
+  flex-shrink: 0;
+  width: 82px !important;
+}
+
+.zone-item--date-between > .el-button {
+  order: 3;
+  margin-left: 0;
+}
+
+.zone-item--date-between > .el-button:first-of-type {
+  margin-left: auto;
+}
+
+.zone-item--date-between::after {
+  content: '';
+  order: 4;
+  flex-basis: 100%;
+  height: 0;
+}
+
+.zone-item--date-between > .zone-item-date-range {
+  order: 5;
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 .between-inputs {
@@ -1412,9 +1481,22 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.filter-date-range-picker {
+  width: 100%;
+}
+
+.filter-date-range-picker :deep(.el-range-editor.el-input__wrapper) {
+  width: 100%;
+}
+
 .filter-date-picker-sm {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: 96px;
+}
+
+.filter-date-picker-sm :deep(.el-input__wrapper) {
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .filter-number-input {

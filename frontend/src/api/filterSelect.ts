@@ -70,13 +70,9 @@ export function normalizeApiDate(val?: string): string {
   return ''
 }
 
-/** 日期格式化为联动接口值，如 20260705 */
+/** 日期格式化为联动接口值，如 2026-07-05 */
 export function formatDateForSelectApi(val: string): string {
-  if (!val) return ''
-  const normalized = normalizeApiDate(val)
-  if (normalized) return normalized.replace(/-/g, '')
-  const digits = val.replace(/\D/g, '')
-  return digits.slice(0, 8)
+  return normalizeApiDate(val)
 }
 
 /** 将日期限制在 [start, end] 范围内 */
