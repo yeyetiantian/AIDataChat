@@ -82,10 +82,22 @@ export interface PivotConfig {
   pagination?: Pagination
   grand_total?: boolean
   subtotals?: boolean
+  chart_type?: string
   limit?: number
   having?: FilterOnAgg[]
   calculated_fields?: CalculatedField[]
   calculated_items?: CalculatedItem[]
+}
+
+export interface RecommendChartItem {
+  type: string
+  score: number
+  reason: string
+}
+
+export interface RecommendChartResponse {
+  recommendations: RecommendChartItem[]
+  top: string
 }
 
 export interface PivotResponse {
