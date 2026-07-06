@@ -64,6 +64,7 @@
             :config="chart.pivot_config"
             :chart-type="chart.chart_type"
             :hide-toolbar="true"
+            :hide-title="true"
           />
         </div>
         <div class="card-footer">
