@@ -630,10 +630,10 @@ function buildSelectApiFilters(): FilterItem[] {
   })
 }
 
-function applyAlarmTimeRange(startAlarmTime?: string, endAlarmTime?: string) {
+function applyAlarmTimeRange(startAlarmTime?: string | null, endAlarmTime?: string | null) {
   if (!startAlarmTime && !endAlarmTime) return
-  alarmTimeRange.start = normalizeApiDate(startAlarmTime)
-  alarmTimeRange.end = normalizeApiDate(endAlarmTime)
+  alarmTimeRange.start = normalizeApiDate(startAlarmTime ?? undefined)
+  alarmTimeRange.end = normalizeApiDate(endAlarmTime ?? undefined)
   clampAlarmTimeFilterValue()
 }
 

@@ -55,6 +55,7 @@
                 </div>
                 <VegaLiteRenderer
                   v-else
+                  :ref="(el) => setRendererRef(chart.id, el)"
                   :spec="chart.vega_spec"
                   :data="chart.data"
                   :config="chart.pivot_config"
