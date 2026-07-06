@@ -7,6 +7,8 @@ export interface FilterItem {
   alias?: string
   select_ts?: string
   select_order?: number
+  /** 是否来自右侧信号列表 */
+  isSignal?: boolean
   filter_type?: string
 }
 
@@ -17,11 +19,15 @@ export interface AxisItem {
   aggregation?: 'source' | 'day' | 'week' | 'month' | 'year' | 'quarter' | 'hour'
   group?: 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
   sort?: 'asc' | 'desc'
+  /** 是否来自右侧信号列表 */
+  isSignal?: boolean
 }
 
 export interface LegendItem {
   field: string
   alias?: string
+  /** 是否来自右侧信号列表 */
+  isSignal?: boolean
 }
 
 export interface ShowAs {
@@ -38,6 +44,8 @@ export interface ValueItem {
   aggregation?: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'count_distinct'
   alias?: string
   expr?: string
+  /** 是否来自右侧信号列表 */
+  isSignal?: boolean
   show_as?: ShowAs
 }
 

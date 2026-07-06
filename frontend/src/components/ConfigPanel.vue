@@ -10,16 +10,32 @@
           <el-input v-model="search" placeholder="搜索字段..." size="small" clearable prefix-icon="Search" />
         </div>
         <div class="field-groups-row">
-          <div v-for="group in filteredGroups" :key="group.table_name" class="field-group-col">
+          <div v-if="fixedFieldGroup" class="field-group-col">
             <div class="field-group-label">
-              <span>{{ group.table_name_cn }}</span>
-              <el-tag size="small" type="info" round>{{ group.fields.length }}</el-tag>
+              <span>{{ fixedFieldGroup.table_name_cn }}</span>
+              <el-tag size="small" type="info" round>{{ fixedFieldGroup.fields.length }}</el-tag>
             </div>
             <div class="field-items">
               <div
-                v-for="field in group.fields" :key="field.name"
+                v-for="field in fixedFieldGroup.fields" :key="field.name"
                 class="field-item" draggable="true"
                 @dragstart="onDragStart($event, field)"
+              >
+                <span class="field-name">{{ field.alias_cn }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="field-group-col">
+            <div class="field-group-label">
+              <span>信号列表</span>
+              <el-tag size="small" type="info" round>{{ filteredSignalFields.length }}</el-tag>
+            </div>
+            <div class="field-items">
+              <div v-if="filteredSignalFields.length === 0" class="zone-placeholder">暂无信号</div>
+              <div
+                v-for="field in filteredSignalFields" :key="field.name"
+                class="field-item" draggable="true"
+                @dragstart="onDragStart($event, field, true)"
               >
                 <span class="field-name">{{ field.alias_cn }}</span>
               </div>
@@ -372,6 +388,7 @@ import {
   API_FILTER_FIELDS,
   API_DROPDOWN_FILTER_FIELDS,
   STATIC_DROPDOWN_DATA,
+  SIGNAL_TRIGGER_FILTER_FIELDS,
 } from '@/constants/filterDropdown'
 import {
   fetchFilterSelectOptions,
@@ -391,8 +408,10 @@ interface DropdownOption {
 
 const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
 const alarmTimeRange = reactive({ start: '', end: '' })
+const signalFields = ref<FieldDef[]>([])
 const resultDialogVisible = ref(false)
 let filterSelectRequestId = 0
+let signalListRequestId = 0
 const latestRecommendedTop = ref<string | null>(null)
 const latestRecommendKey = ref('')
 let recommendTimer: ReturnType<typeof setTimeout> | null = null
@@ -454,19 +473,102 @@ const sortOptions = computed(() => [
   ...stateData.values.map(v => ({ label: v.alias || `${v.aggregation?.toUpperCase() || ''}(${v.field})`, value: v.alias || v.field })),
 ])
 
-// 字段列表筛选
-const filteredGroups = computed(() => {
-  if (!stateData.search) return stateData.groups
+// 左侧固定字段组（api/fields 第一个）
+const fixedFieldGroup = computed(() => {
+  const first = stateData.groups[0]
+  if (!first) return null
+  if (!stateData.search) return first
   const q = stateData.search.toLowerCase()
-  return stateData.groups.map(g => ({
-    ...g,
-    fields: g.fields.filter(f =>
-      f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q)
-    ),
-  })).filter(g => g.fields.length > 0)
+  const fields = first.fields.filter(f =>
+    f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q),
+  )
+  if (fields.length === 0) return null
+  return { ...first, fields }
+})
+
+// 右侧信号列表
+const filteredSignalFields = computed(() => {
+  if (!stateData.search) return signalFields.value
+  const q = stateData.search.toLowerCase()
+  return signalFields.value.filter(f =>
+    f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q),
+  )
 })
 
 // ========== 方法 ==========
+
+function isSignalTriggerField(field: string): boolean {
+  return (SIGNAL_TRIGGER_FILTER_FIELDS as readonly string[]).includes(field)
+}
+
+function toSignalFieldDef(name: string): FieldDef {
+  return {
+    name,
+    alias_cn: name,
+    category: 'dimension',
+    data_type: 'string',
+    source_table: '',
+    description: '',
+  }
+}
+
+function pruneStaleSignalItems(validNames: Set<string>, removedNames: string[]) {
+  const isStale = (item: { field?: string; isSignal?: boolean }) =>
+    !!item.isSignal && !!item.field && !validNames.has(item.field)
+
+  const prevFilterCount = stateData.filters.length
+  stateData.filters = stateData.filters.filter(f => !isStale(f))
+  if (stateData.filters.length !== prevFilterCount) {
+    syncFilterSelectOrders()
+  }
+
+  stateData.axes = stateData.axes.filter(a => !isStale(a))
+  stateData.legend = stateData.legend.filter(l => !isStale(l))
+  stateData.values = stateData.values.filter(v => !isStale(v))
+
+  if (removedNames.length > 0) {
+    const removedSet = new Set(removedNames)
+    stateData.sortField = stateData.sortField.filter(sf => !removedSet.has(sf))
+    stateData.having = stateData.having.filter(h => !removedSet.has(h.field))
+  }
+}
+
+async function refreshSignalList() {
+  const prevNames = signalFields.value.map(f => f.name)
+
+  if (!stateData.filters.some(f => isSignalTriggerField(f.field))) {
+    signalFields.value = []
+    if (prevNames.length > 0) {
+      pruneStaleSignalItems(new Set(), prevNames)
+    }
+    return
+  }
+
+  const requestId = ++signalListRequestId
+  try {
+    const resp = await fetchFilterSelectOptions({
+      filters: buildSelectApiFilters(),
+      focusField: 'signal',
+    })
+    if (requestId !== signalListRequestId) return
+
+    const item = Array.isArray(resp)
+      ? resp.find(r => r.field === 'signal') ?? resp[0]
+      : resp
+
+    const newNames = item?.signalList ?? []
+    const validSet = new Set(newNames)
+    const removedNames = prevNames.filter(n => !validSet.has(n))
+
+    signalFields.value = newNames.map(toSignalFieldDef)
+
+    if (removedNames.length > 0) {
+      pruneStaleSignalItems(validSet, removedNames)
+    }
+  } catch (e) {
+    console.error('[ConfigPanel] 获取信号列表失败', e)
+  }
+}
 
 function isTimeFilterField(field: string): boolean {
   return (TIME_FILTER_FIELDS as readonly string[]).includes(field)
@@ -619,6 +721,9 @@ function onFilterFieldChange(item: FilterItem) {
   touchFilterSelectTs(item)
   syncFilterSelectOrders()
   refreshFilterSelectOptions(item.field)
+  if (isSignalTriggerField(item.field)) {
+    refreshSignalList()
+  }
 }
 
 function getFilterOptions(field: string): DropdownOption[] {
@@ -827,9 +932,10 @@ function onAxisAggregationChange(item: AxisItem, val: string) {
   item.aggregation = (val || 'source') as AxisItem['aggregation']
 }
 
-function onDragStart(event: DragEvent, field: FieldDef) {
+function onDragStart(event: DragEvent, field: FieldDef, fromSignal = false) {
   event.dataTransfer?.setData('application/json', JSON.stringify({
     name: field.name, alias_cn: field.alias_cn, category: field.category, data_type: field.data_type,
+    isSignal: fromSignal,
   }))
   event.dataTransfer!.effectAllowed = 'move'
 }
@@ -837,7 +943,8 @@ function onDragStart(event: DragEvent, field: FieldDef) {
 function onDrop(event: DragEvent, zone: ZoneType) {
   const raw = event.dataTransfer?.getData('application/json')
   if (!raw) return
-  const field: FieldDef = JSON.parse(raw)
+  const field = JSON.parse(raw) as FieldDef & { isSignal?: boolean }
+  const isSignal = !!field.isSignal
   if (zone === 'filters') {
     const isTime = isTimeFilterField(field.name)
     const isNumeric = isNumericFilterField(field.name)
@@ -847,6 +954,7 @@ function onDrop(event: DragEvent, zone: ZoneType) {
       alias: field.alias_cn,
       select_ts: '',
       filter_type: getFilterType(field.name),
+      isSignal,
     }
     if (isTime || isString) {
       newFilter = { field: field.name, op: '=', value: '', ...meta }
@@ -862,12 +970,15 @@ function onDrop(event: DragEvent, zone: ZoneType) {
     } else if (isApiFilterField(field.name)) {
       refreshFilterSelectOptions(field.name)
     }
+    if (isSignalTriggerField(field.name)) {
+      refreshSignalList()
+    }
   } else if (zone === 'axes') {
-    const axisItem: AxisItem = { field: field.name, alias: field.alias_cn, sort: 'asc' }
+    const axisItem: AxisItem = { field: field.name, alias: field.alias_cn, sort: 'asc', isSignal }
     if (isTimeFilterField(field.name)) axisItem.aggregation = 'source'
     stateData.axes.push(axisItem)
   } else if (zone === 'legend') {
-    stateData.legend.push({ field: field.name, alias: field.alias_cn })
+    stateData.legend.push({ field: field.name, alias: field.alias_cn, isSignal })
   } else if (zone === 'values') {
     const id = `val_${stateData.values.length + 1}`
     const isMeasure = field.category === 'measure'
@@ -875,6 +986,7 @@ function onDrop(event: DragEvent, zone: ZoneType) {
       id, field: field.name,
       aggregation: isMeasure ? 'sum' : 'count',
       alias: field.alias_cn,
+      isSignal,
     })
   }
 }
@@ -886,7 +998,12 @@ function removeItem(index: number, zone: ZoneType) {
     legend: stateData.legend,
     values: stateData.values,
   } as const)[zone]
-  if (arr) arr.splice(index, 1)
+  if (!arr) return
+  const removedFilter = zone === 'filters' ? (arr[index] as FilterItem) : null
+  arr.splice(index, 1)
+  if (removedFilter && isSignalTriggerField(removedFilter.field)) {
+    refreshSignalList()
+  }
 }
 
 function buildPivotConfig(): PivotConfig {
@@ -1014,6 +1131,7 @@ function handleClear() {
   stateData.limitVal = 1000
   stateData.having = []
   stateData.chartType = 'bar'
+  signalFields.value = []
   latestRecommendedTop.value = null
   latestRecommendKey.value = ''
 }
@@ -1029,6 +1147,9 @@ defineExpose({
       })
       const apiField = config.filters.find(f => isApiFilterField(f.field))?.field
       if (apiField) refreshFilterSelectOptions(apiField)
+      if (config.filters.some(f => isSignalTriggerField(f.field))) {
+        refreshSignalList()
+      }
     }
     if (config.axes) stateData.axes = config.axes.map(ensureAxisAggregation)
     if (config.legend) stateData.legend = config.legend
