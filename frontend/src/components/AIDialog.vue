@@ -27,22 +27,22 @@
                 <span class="card-title">{{ chart.title }}</span>
                 <div class="card-actions">
                   <el-tooltip content="保存图片" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(chart.id, chart.title)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(`chat_${ci}`, chart.title)">
                       <el-icon :size="16"><Picture /></el-icon>
                     </el-button>
                   </el-tooltip>
-                  <el-tooltip content="查看数据" placement="top">
+                  <!-- <el-tooltip content="查看数据" placement="top">
                     <el-button text circle class="action-btn action-btn-primary" @click="openChartData(chart.id)">
                       <el-icon :size="16"><View /></el-icon>
                     </el-button>
-                  </el-tooltip>
+                  </el-tooltip> -->
                   <el-tooltip content="全屏" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(chart.id)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(`chat_${ci}`)">
                       <el-icon :size="16"><FullScreen /></el-icon>
                     </el-button>
                   </el-tooltip>
                   <el-tooltip content="保存到看板" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="saveChartToBoard(chart, ci)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="confirmSave(chart)">
                       <el-icon :size="16"><PieChart /></el-icon>
                     </el-button>
                   </el-tooltip>
@@ -55,13 +55,11 @@
                 </div>
                 <VegaLiteRenderer
                   v-else
-                  :spec="chart.vega_spec"
+                  :ref="(el) => setRendererRef(`chat_${ci}`, el)"
                   :data="chart.data"
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"
                   :hide-toolbar="true"
-                  :height="260"
-                  style="min-height: auto;"
                 />
               </div>
             </div>
@@ -142,7 +140,7 @@ const saveTitle = ref('')
 const saveDesc = ref('')
 const saving = ref(false)
 const savingMessage = ref<any>(null)
-  const rendererRefs = ref<Record<number, ChartRendererHandle | null>>({})
+  const rendererRefs = ref<Record<string, ChartRendererHandle | null>>({})
 
 const suggestions = [
   '各车辆触发次数占比',
@@ -157,7 +155,7 @@ function handleSend() {
   chatStore.sendMessage(msg)
 }
 
-function setRendererRef(id: number, instance: any) {
+function setRendererRef(id: string, instance: any) {
   if (
     instance &&
     typeof instance.openDataDialog === 'function' &&
@@ -171,15 +169,15 @@ function setRendererRef(id: number, instance: any) {
   rendererRefs.value[id] = null
 }
 
-function openChartData(id: number) {
+function openChartData(id: string) {
   rendererRefs.value[id]?.openDataDialog()
 }
 
-function exportChartPng(id: number, title: string) {
+function exportChartPng(id: string, title: string) {
   void rendererRefs.value[id]?.exportPng(`${title || 'chart'}.png`)
 }
 
-function toggleChartFullscreen(id: number) {
+function toggleChartFullscreen(id: string) {
   rendererRefs.value[id]?.toggleFullscreen()
 }
 
@@ -195,33 +193,31 @@ function saveChartToBoard(chart: any, index: number) {
   showSaveDialog.value = true
 }
 
-async function confirmSave() {
-  if (!saveTitle.value.trim() || !savingMessage.value) return
+async function confirmSave(chart: any) {
+  if (!chart) return
   saving.value = true
   try {
-    const chart = savingMessage.value
     emit('save', {
-      title: saveTitle.value,
-      description: saveDesc.value,
+      title: chart.title,
+      description: '',
       pivot_config: (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
       chart_type: chart.chart_type || 'bar',
       vega_spec: chart.vega_spec || null,
       data: chart.data || null,
     })
     showSaveDialog.value = false
-    savingMessage.value = null
   } finally {
     saving.value = false
   }
 }
 
-// 滚动到底部
-watch(() => chatStore.messages.length, async () => {
-  await nextTick()
-  if (messagesRef.value) {
-    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-  }
-})
+// // 滚动到底部
+// watch(() => chatStore.messages.length, async () => {
+//   await nextTick()
+//   if (messagesRef.value) {
+//     messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+//   }
+// })
 </script>
 
 <style scoped>
