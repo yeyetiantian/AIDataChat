@@ -298,7 +298,7 @@ function buildVegaSpec(): Record<string, any> | null {
       const lf = legend[0].field
       encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
     }
-    if (['line', 'area', 'point'].includes(chartType) && axes[0]?.group && axes[0].group !== 'raw') {
+    if (['line', 'area', 'point'].includes(chartType) && axes[0]?.aggregation && axes[0].aggregation !== 'source') {
       encoding.x.type = 'temporal'
     }
   }

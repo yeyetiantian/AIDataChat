@@ -5,12 +5,17 @@ export interface FilterItem {
   op: string
   value: any
   alias?: string
+  select_ts?: string
+  select_order?: number
+  filter_type?: 'string' | 'number' | 'date'
 }
 
 export interface AxisItem {
   field: string
   alias?: string
-  group?: 'raw' | 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
+  /** 时间字段粒度（仅时间类型轴使用） */
+  aggregation?: 'source' | 'day' | 'week' | 'month' | 'year' | 'quarter' | 'hour'
+  group?: 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour'
   sort?: 'asc' | 'desc'
 }
 
