@@ -84,27 +84,19 @@
                     :disabled-date="getDisabledDateForField(item.field)"
                     @change="() => onFilterFieldChange(item)"
                   />
-                  <div v-else-if="Array.isArray(item.value)" class="between-inputs">
+                  <div v-else-if="Array.isArray(item.value)" class="zone-item-date-range">
                     <el-date-picker
-                      v-model="item.value[0]"
-                      type="date"
+                      :model-value="getDateRangeFilterValue(item)"
+                      type="daterange"
                       value-format="YYYY-MM-DD"
+                      range-separator="至"
                       size="small"
-                      class="filter-date-picker-sm"
-                      placeholder="开始"
+                      style="width:100%"
+                      class="filter-date-range-picker"
+                      start-placeholder="开始"
+                      end-placeholder="结束"
                       :disabled-date="getDisabledDateForField(item.field)"
-                      @change="() => onFilterFieldChange(item)"
-                    />
-                    <span>~</span>
-                    <el-date-picker
-                      v-model="item.value[1]"
-                      type="date"
-                      value-format="YYYY-MM-DD"
-                      size="small"
-                      class="filter-date-picker-sm"
-                      placeholder="结束"
-                      :disabled-date="getDisabledDateForField(item.field)"
-                      @change="() => onFilterFieldChange(item)"
+                      @update:model-value="(val) => onDateRangeFilterChange(item, val)"
                     />
                   </div>
                 </template>
@@ -915,6 +907,19 @@ function onTimeFilterOpChange(item: FilterItem, op: string | number) {
   onRangeFilterOpChange(item, op)
 }
 
+function getDateRangeFilterValue(item: FilterItem): [string, string] | null {
+  if (!Array.isArray(item.value)) return null
+  const [start, end] = item.value
+  if (!start && !end) return null
+  if (start && end) return [String(start), String(end)]
+  return null
+}
+
+function onDateRangeFilterChange(item: FilterItem, val: [string, string] | null) {
+  item.value = val && val.length === 2 ? val : ['', '']
+  onFilterFieldChange(item)
+}
+
 function addHaving() {
   stateData.having.push({ field: '', op: '>=', value: '' })
 }
@@ -1426,11 +1431,18 @@ onBeforeUnmount(() => {
 .zone-item--date-between .zone-item-field {
   order: 1;
   flex: 1 1 0;
-  max-width: calc(100% - 52px);
+  min-width: 0;
+  max-width: none;
+}
+
+.zone-item--date-between > .el-select {
+  order: 2;
+  flex-shrink: 0;
+  width: 82px !important;
 }
 
 .zone-item--date-between > .el-button {
-  order: 2;
+  order: 3;
   margin-left: 0;
 }
 
@@ -1440,20 +1452,14 @@ onBeforeUnmount(() => {
 
 .zone-item--date-between::after {
   content: '';
-  order: 3;
+  order: 4;
   flex-basis: 100%;
   height: 0;
 }
 
-.zone-item--date-between > .el-select {
-  order: 4;
-  flex-shrink: 0;
-  width: 82px !important;
-}
-
-.zone-item--date-between > .between-inputs {
+.zone-item--date-between > .zone-item-date-range {
   order: 5;
-  flex: 1 1 0;
+  flex: 1 1 100%;
   min-width: 0;
 }
 
@@ -1473,6 +1479,14 @@ onBeforeUnmount(() => {
 .filter-date-picker {
   flex: 1;
   min-width: 0;
+}
+
+.filter-date-range-picker {
+  width: 100%;
+}
+
+.filter-date-range-picker :deep(.el-range-editor.el-input__wrapper) {
+  width: 100%;
 }
 
 .filter-date-picker-sm {
