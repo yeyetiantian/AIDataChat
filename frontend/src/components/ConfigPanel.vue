@@ -149,6 +149,7 @@
                       @blur="() => onFilterFieldChange(item)"
                     />
                   </div>
+                  
                 </template>
                 <template v-else-if="isStringFilterField(item.field)">
                   <el-select
