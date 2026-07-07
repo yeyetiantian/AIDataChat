@@ -197,19 +197,26 @@
                       :value="opt.value"
                     />
                   </el-select>
-                  <el-input
+                  <el-select
                     v-else
-                    readonly
+                    :model-value="getFilterPickerValues(item)"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :automatic-dropdown="false"
                     size="small"
-                    class="filter-value-select filter-picker-input"
-                    :placeholder="getFilterPickerPlaceholder(item)"
-                    :model-value="getSignalFilterPickerText(item)"
-                    @click="openSignalFilterSelectDialog(item)"
+                    class="filter-value-select filter-picker-select"
+                    placeholder="全部"
+                    @click="onFilterPickerClick($event, () => openSignalFilterSelectDialog(item))"
+                    @remove-tag="(val: string) => onFilterPickerRemoveTag(item, val, onSignalFilterMultiChange)"
                   >
-                    <template #suffix>
-                      <el-icon><ArrowDown /></el-icon>
-                    </template>
-                  </el-input>
+                    <el-option
+                      v-for="opt in getFilterPickerOptions(item, SIGNAL_FILTER_DROPDOWN_FOCUS)"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
                 </template>
                 <template v-else-if="isMultiSelectDropdownFilter(item.field)">
                   <el-select
@@ -237,19 +244,26 @@
                       :value="opt.value"
                     />
                   </el-select>
-                  <el-input
+                  <el-select
                     v-else
-                    readonly
+                    :model-value="getFilterPickerValues(item)"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :automatic-dropdown="false"
                     size="small"
-                    class="filter-value-select filter-picker-input"
-                    :placeholder="getFilterPickerPlaceholder(item)"
-                    :model-value="getFilterPickerText(item)"
-                    @click="openFilterSelectDialog(item)"
+                    class="filter-value-select filter-picker-select"
+                    placeholder="全部"
+                    @click="onFilterPickerClick($event, () => openFilterSelectDialog(item))"
+                    @remove-tag="(val: string) => onFilterPickerRemoveTag(item, val, onFilterDropdownChange)"
                   >
-                    <template #suffix>
-                      <el-icon><ArrowDown /></el-icon>
-                    </template>
-                  </el-input>
+                    <el-option
+                      v-for="opt in getFilterPickerOptions(item, item.field)"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
                 </template>
                 <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'filters')" />
                 <el-button
@@ -586,14 +600,6 @@ function isSignalFilterDropdownLargeList(): boolean {
     > FILTER_DROPDOWN_DIALOG_THRESHOLD
 }
 
-function getSignalFilterPickerText(item: FilterItem): string {
-  const raw = Array.isArray(item.value) ? item.value : ['']
-  const values = raw.filter(v => v !== '' && v != null).map(String)
-  if (values.length === 0) return '全部'
-  const opts = dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? []
-  return values.map(v => opts.find(o => o.value === v)?.label ?? v).join(', ')
-}
-
 function enrichSignalFilterDialogData(): Record<string, unknown>[] {
   const raw = filterDropdownRawCache[SIGNAL_FILTER_DROPDOWN_FOCUS]
   if (raw?.length) {
@@ -801,7 +807,7 @@ function isMultiSelectDropdownFilter(field: string): boolean {
 }
 
 function isApiRemoteDropdownField(field: string): boolean {
-  return isApiDropdownField(field) && field !== 'vehicle' && !isFilterDropdownLargeList(field)
+  return isApiDropdownField(field) && !isFilterDropdownLargeList(field)
 }
 
 function isStaticDropdownField(field: string): boolean {
@@ -1013,20 +1019,33 @@ function getFilterOptions(field: string): DropdownOption[] {
   return dropdownCache[field] ?? [{ label: '全部', value: '' }]
 }
 
+function getFilterPickerValues(item: FilterItem): string[] {
+  const raw = Array.isArray(item.value) ? item.value : ['']
+  return raw.filter(v => v !== '' && v != null).map(String)
+}
+
+function getFilterPickerOptions(item: FilterItem, cacheField: string): DropdownOption[] {
+  const opts = dropdownCache[cacheField] ?? []
+  return getFilterPickerValues(item).map(v => opts.find(o => o.value === v) ?? { label: v, value: v })
+}
+
+function onFilterPickerClick(event: MouseEvent, openDialog: () => void) {
+  const target = event.target as HTMLElement
+  if (target.closest('.el-tag__close')) return
+  openDialog()
+}
+
+function onFilterPickerRemoveTag(
+  item: FilterItem,
+  removedValue: string,
+  onChange: (item: FilterItem, val: string[]) => void,
+) {
+  const next = getFilterPickerValues(item).filter(v => v !== removedValue)
+  onChange(item, next.length > 0 ? next : [''])
+}
+
 function isFilterDropdownLargeList(field: string): boolean {
   return (dropdownCache[field] ?? []).filter(o => o.value !== '').length > FILTER_DROPDOWN_DIALOG_THRESHOLD
-}
-
-function getFilterPickerPlaceholder(_item: FilterItem): string {
-  return ''
-}
-
-function getFilterPickerText(item: FilterItem): string {
-  const raw = Array.isArray(item.value) ? item.value : ['']
-  const values = raw.filter(v => v !== '' && v != null).map(String)
-  if (values.length === 0) return '全部'
-  const opts = dropdownCache[item.field] ?? []
-  return values.map(v => opts.find(o => o.value === v)?.label ?? v).join(', ')
 }
 
 function buildStaticDropdownRaw(field: string): Record<string, unknown>[] {
@@ -1989,11 +2008,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.filter-picker-input {
+.filter-picker-select {
   cursor: pointer;
 }
 
-.filter-picker-input :deep(.el-input__inner) {
+.filter-picker-select :deep(.el-select__wrapper) {
   cursor: pointer;
 }
 
