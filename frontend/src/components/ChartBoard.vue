@@ -1,11 +1,6 @@
 <template>
   <div class="chart-board">
-    <!-- <div class="board-header">
-      <h3>📋 我的看板</h3>
-      <span class="board-tip">最多 6 个看板，每行 3 个</span>
-    </div> -->
-
-    <div v-if="store.loading" class="board-loading">
+    <div v-if="initialLoading" class="board-loading">
       <el-skeleton :rows="3" animated />
     </div>
 
@@ -49,7 +44,7 @@
             </el-tooltip>
           </div>
         </div>
-        <div class="card-desc" v-if="chart.description">{{ chart.description }}</div>
+        <div v-if="chart.description" class="card-desc">{{ chart.description }}</div>
         <div class="card-chart">
           <div v-if="!hasRenderableChart(chart)" class="draft-placeholder">
             <el-icon :size="34" class="draft-placeholder-icon"><Grid /></el-icon>
@@ -76,7 +71,6 @@
       </div>
     </div>
 
-    <!-- 删除确认 -->
     <el-dialog v-model="showDelete" title="确认删除" width="400px">
       <p>确定要删除这个图表吗？</p>
       <template #footer>
@@ -91,6 +85,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Delete, FullScreen, Grid, Picture } from '@element-plus/icons-vue'
 import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
+import { buildBoardSlots } from '@/utils/boardSlots'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
 
 const store = useChartStore()
@@ -105,6 +100,7 @@ type DraftChart = {
   data?: Record<string, any>[] | null
   created_at: string
   updated_at: string
+  slotIndex?: number
   isDraft: true
   isPlaceholder?: false
 }
@@ -119,12 +115,14 @@ type PlaceholderChart = {
   data: null
   created_at: ''
   updated_at: ''
+  slotIndex: number
   isPlaceholder: true
   isDraft?: false
 }
 
-type SavedBoardCard = SavedChart & { isDraft?: false, isPlaceholder?: false }
-type BoardCard = SavedBoardCard | DraftChart | PlaceholderChart
+type DraftBoardCard = DraftChart & { slotIndex: number }
+type SavedBoardCard = SavedChart & { slotIndex: number, isDraft?: false, isPlaceholder?: false }
+type BoardCard = SavedBoardCard | DraftBoardCard | PlaceholderChart
 
 type ChartRendererHandle = {
   openDataDialog: () => void
@@ -146,41 +144,53 @@ const emit = defineEmits<{
   'remove-draft': [draftId: string]
 }>()
 
+const initialLoading = ref(true)
 const showDelete = ref(false)
 const deleteId = ref<number | null>(null)
 const chartTypeLabels: Record<string, string> = {
   bar: '柱状图',
   line: '折线图',
-  area: '波形图',
+  area: '面积图',
   point: '散点图',
-  pie: '饼状图',
+  pie: '饼图',
   radar: '雷达图',
 }
 
 const boardCards = computed<BoardCard[]>(() => {
-  const savedCharts = [...store.charts].sort((a, b) => {
-    const timeA = Date.parse(a.created_at || '') || 0
-    const timeB = Date.parse(b.created_at || '') || 0
-    if (timeA !== timeB) return timeA - timeB
-    return Number(a.id) - Number(b.id)
-  })
-  const cards: BoardCard[] = [...savedCharts, ...props.draftCharts]
-  const placeholderCount = Math.max(MAX_BOARD_CHARTS - cards.length, 0)
-  const placeholders: PlaceholderChart[] = Array.from({ length: placeholderCount }, (_, index) => ({
-    id: `placeholder-${index + 1}`,
-    title: '空白看板',
-    description: '',
-    pivot_config: null,
-    chart_type: 'bar',
-    data: null,
-    created_at: '',
-    updated_at: '',
-    isPlaceholder: true,
-  }))
+  const draftQueue = [...props.draftCharts]
 
-  return [...cards, ...placeholders]
+  return buildBoardSlots(store.charts, MAX_BOARD_CHARTS).map((savedChart, slotIndex) => {
+    if (savedChart) {
+      return {
+        ...savedChart,
+        slotIndex,
+      }
+    }
+
+    const draftChart = draftQueue.shift()
+    if (draftChart) {
+      return {
+        ...draftChart,
+        slotIndex,
+      }
+    }
+
+    return {
+      id: `placeholder-${slotIndex + 1}`,
+      title: '空白看板',
+      description: '',
+      pivot_config: null,
+      chart_type: 'bar',
+      data: null,
+      created_at: '',
+      updated_at: '',
+      slotIndex,
+      isPlaceholder: true,
+    }
+  })
 })
-const visibleCharts = computed(() => boardCards.value.slice(0, MAX_BOARD_CHARTS))
+
+const visibleCharts = computed(() => boardCards.value)
 const rendererRefs = ref<Record<string | number, ChartRendererHandle | null>>({})
 
 function getCardKey(chart: BoardCard) {
@@ -207,17 +217,18 @@ function handleRemove(chart: BoardCard) {
   }
 }
 
-function setRendererRef(id: string | number, instance: any) {
+function setRendererRef(id: string | number, instance: unknown) {
   if (
     instance &&
-    typeof instance.openDataDialog === 'function' &&
-    typeof instance.toggleFullscreen === 'function' &&
-    typeof instance.exportPng === 'function' &&
-    typeof instance.exportSvg === 'function'
+    typeof (instance as ChartRendererHandle).openDataDialog === 'function' &&
+    typeof (instance as ChartRendererHandle).toggleFullscreen === 'function' &&
+    typeof (instance as ChartRendererHandle).exportPng === 'function' &&
+    typeof (instance as ChartRendererHandle).exportSvg === 'function'
   ) {
     rendererRefs.value[id] = instance as ChartRendererHandle
     return
   }
+
   rendererRefs.value[id] = null
 }
 
@@ -233,6 +244,7 @@ async function confirmDelete() {
   if (deleteId.value != null) {
     await store.deleteChart(deleteId.value)
   }
+
   showDelete.value = false
   deleteId.value = null
 }
@@ -246,12 +258,12 @@ function getChartTypeLabel(chartType: string) {
   return chartTypeLabels[chartType] || chartType || '未知图表'
 }
 
-/**
- * 用已保存的 pivot_config 调用 /api/pivot 动态获取数据
- */
-
 onMounted(async () => {
-  await store.fetchCharts()
+  try {
+    await store.fetchCharts()
+  } finally {
+    initialLoading.value = false
+  }
 })
 </script>
 

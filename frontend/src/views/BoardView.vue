@@ -120,10 +120,11 @@ type ConfigPanelHandle = {
   applyConfigAndQuery: (config: PivotConfig) => Promise<void>
 }
 
-type ToggleBoardCard = (SavedChart & { isPlaceholder?: false }) | {
+type ToggleBoardCard = (SavedChart & { isPlaceholder?: false, slotIndex: number }) | {
   id: string | number
   pivot_config: any
   chart_type: string
+  slotIndex: number
   isPlaceholder?: boolean
 }
 
@@ -327,7 +328,7 @@ async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | '
   showAiDialog.value = false
 }
 
-async function createEmptyBoard() {
+async function createEmptyBoard(preferredSlot?: number) {
   const created = await chartStore.saveChart(
     '空白看板',
     createEmptyBoardConfig(),
@@ -335,6 +336,7 @@ async function createEmptyBoard() {
     'bar',
     null,
     null,
+    preferredSlot,
   )
 
   if (!created) {
@@ -370,7 +372,7 @@ async function handleToggleConfig(chart: ToggleBoardCard) {
   if (chartStore.loading) return
 
   if (chart.isPlaceholder) {
-    await createEmptyBoard()
+    await createEmptyBoard(chart.slotIndex)
     return
   }
 
