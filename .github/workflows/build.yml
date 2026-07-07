@@ -49,13 +49,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/requirements-lock.txt
 
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
       - name: 安装 Python 依赖
         run: pip install "--only-binary=:all:" -r backend/requirements-lock.txt
 
