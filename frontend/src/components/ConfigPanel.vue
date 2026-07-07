@@ -347,16 +347,27 @@
         <!-- 排序 + Limit（在按钮上方） -->
         <div class="extra-row">
           <div class="extra-item">
+            <label>图表</label>
+            <el-select v-model="chartType" size="small" style="width:90px">
+              <el-option label="柱状图" value="bar" />
+              <el-option label="折线图" value="line" />
+              <el-option label="波形图" value="area" />
+              <el-option label="散点图" value="point" />
+              <el-option label="饼状图" value="pie" />
+              <el-option label="雷达图" value="radar" />
+            </el-select>
+          </div>
+          <div class="extra-item extra-item--sort">
             <label>排序</label>
             <el-select
               v-model="sortField"
+              class="extra-sort-field-select"
               multiple
               collapse-tags
               collapse-tags-tooltip
               size="small"
               clearable
               placeholder="字段"
-              style="width:160px"
             >
               <el-option v-for="o in sortOptions" :key="o.value" :label="o.label" :value="o.value" />
             </el-select>
@@ -369,17 +380,6 @@
             <label>Limit</label>
             <el-input-number v-model="limitVal" :min="1" :max="100000" size="small" controls-position="right" style="width:90px" />
           </div> -->
-          <div class="extra-item">
-            <label>图表</label>
-            <el-select v-model="chartType" size="small" style="width:90px">
-              <el-option label="柱状图" value="bar" />
-              <el-option label="折线图" value="line" />
-              <el-option label="波形图" value="area" />
-              <el-option label="散点图" value="point" />
-              <el-option label="饼状图" value="pie" />
-              <el-option label="雷达图" value="radar" />
-            </el-select>
-          </div>
         </div>
 
         <!-- HAVING 设置 -->
@@ -407,6 +407,7 @@
         <div class="zone-actions">
           <el-button size="small" type="primary" :loading="loading" @click="handleQuery">加载报表数据</el-button>
           <el-button size="small" @click="handleClear">清空</el-button>
+          <el-button size="small" type="primary" :disabled="!canSaveConfig" @click="handleSaveConfig">保存配置</el-button>
         </div>
       </div>
     </div>
@@ -417,8 +418,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, toRef, onBeforeUnmount, onMounted, watch } from 'vue'
-import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document } from '@element-plus/icons-vue'
+import { ref, reactive, computed, toRef, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document, ArrowDown } from '@element-plus/icons-vue'
 import type {
   FieldDef,
   ZoneType,
@@ -458,6 +460,7 @@ import {
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
 import FilterSelectDialog from '@/components/FilterSelectDialog.vue'
+import { saveStoredReportConfig } from '@/utils/reportConfigStorage'
 
 interface DropdownOption {
   label: string
@@ -481,6 +484,7 @@ const latestRecommendedTop = ref<string | null>(null)
 const latestRecommendKey = ref('')
 let recommendTimer: ReturnType<typeof setTimeout> | null = null
 let recommendRequestId = 0
+let recommendationSuppressed = false
 
 export interface TableGroup {
   table_name: string
@@ -491,6 +495,7 @@ export interface TableGroup {
 // ========== 唯一外部参数 ==========
 const props = defineProps<{
   api: (config: any) => Promise<any>
+  configName?: string
 }>()
 
 // ========== stateData：全部内部状态 ==========
@@ -522,6 +527,7 @@ const axes = computed(() => stateData.axes)
 const legend = computed(() => stateData.legend)
 const values = computed(() => stateData.values)
 const loading = computed(() => stateData.loading)
+const canSaveConfig = computed(() => Boolean(props.configName?.trim()))
 const search = toRef(stateData, 'search')
 const showAsMap = stateData.showAsMap as Record<number, string>
 
@@ -672,7 +678,7 @@ async function refreshSignalFilterDropdown(keyword?: string) {
       return { name, value: name, label: name }
     })
     const newOptions = dropDown
-      .map(row => toFilterDropdownOption(row as FilterSelectDropdownItem))
+      .map(option => row => toFilterDropdownOption(option)(row as FilterSelectDropdownItem))
       .filter(opt => opt.value !== '')
     const selectedValues = getAllSignalFilterSelectedValues()
     const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS])
@@ -1329,6 +1335,17 @@ function onShowAsChange(index: number, val: string) {
   }
 }
 
+function resetShowAsMap() {
+  Object.keys(showAsMap).forEach(key => delete showAsMap[Number(key)])
+}
+
+function syncShowAsMapFromValues() {
+  resetShowAsMap()
+  stateData.values.forEach((item, index) => {
+    showAsMap[index] = item.show_as?.type ?? 'normal'
+  })
+}
+
 function ensureAxisAggregation(item: AxisItem): AxisItem {
   if (!isTimeFilterField(item.field)) return item
   const aggregation = item.aggregation ?? (item.group as AxisItem['aggregation']) ?? 'source'
@@ -1503,11 +1520,35 @@ async function requestChartRecommendation(config: PivotConfig) {
   return null
 }
 
-function scheduleChartRecommendation() {
+function clearRecommendTimer() {
   if (recommendTimer) {
     clearTimeout(recommendTimer)
     recommendTimer = null
   }
+}
+
+function cancelChartRecommendation(invalidateRequest = false) {
+  clearRecommendTimer()
+  if (invalidateRequest) {
+    recommendRequestId += 1
+  }
+}
+
+async function withRecommendationSuppressed<T>(runner: () => T | Promise<T>) {
+  recommendationSuppressed = true
+  cancelChartRecommendation(true)
+  try {
+    return await runner()
+  } finally {
+    await nextTick()
+    recommendationSuppressed = false
+  }
+}
+
+function scheduleChartRecommendation() {
+  cancelChartRecommendation()
+
+  if (recommendationSuppressed) return
 
   if (!canRecommendChart()) {
     latestRecommendedTop.value = null
@@ -1522,10 +1563,10 @@ function scheduleChartRecommendation() {
   }, 250)
 }
 
-async function handleQuery() {
+async function handleQuery(options: { skipRecommendation?: boolean } = {}) {
   stateData.loading = true
   try {
-    if (canRecommendChart()) {
+    if (!options.skipRecommendation && canRecommendChart()) {
       const recommendConfig = buildPivotConfig()
       const currentRecommendKey = getRecommendKey(recommendConfig)
       if (latestRecommendKey.value !== currentRecommendKey || !latestRecommendedTop.value) {
@@ -1550,6 +1591,7 @@ function handleClear() {
   stateData.limitVal = 1000
   stateData.having = []
   stateData.chartType = 'bar'
+  resetShowAsMap()
   signalFields.value = []
   Object.keys(apiFilterKeywords).forEach(key => delete apiFilterKeywords[key])
   Object.keys(filterDropdownRawCache).forEach(key => delete filterDropdownRawCache[key])
@@ -1558,30 +1600,92 @@ function handleClear() {
   latestRecommendKey.value = ''
 }
 
+function applyPivotConfig(config: PivotConfig) {
+  handleClear()
+
+  const configFilters = config.filters ?? []
+  const configAxes = config.axes ?? []
+  const configLegend = config.legend ?? []
+  const configValues = config.values ?? []
+  const configOrderBy = config.order_by ?? []
+  const configHaving = config.having ?? []
+
+  stateData.filters = configFilters.map((filter, index) =>
+    normalizeFilterForUI(
+      {
+        ...filter,
+        value: Array.isArray(filter.value) ? [...filter.value] : filter.value,
+      },
+      index + 1,
+    ),
+  )
+  syncFilterSelectOrders()
+  configFilters.forEach(filter => {
+    if (isStaticDropdownField(filter.field)) loadFilterDropdown(filter.field)
+  })
+  const apiField = configFilters.find(filter => isApiFilterField(filter.field))?.field
+  if (apiField) refreshFilterSelectOptions(apiField)
+  if (configFilters.some(filter => isSignalTriggerField(filter.field))) {
+    refreshSignalList()
+  }
+  if (config.filters.some(f => f.isSignal) || configFilters.some(filter => isSignalDropdownTriggerField(filter.field))) {
+    refreshSignalFilterDropdown()
+  }
+
+  stateData.axes = configAxes.map(axis => ensureAxisAggregation({ ...axis }))
+  stateData.legend = configLegend.map(item => ({ ...item }))
+  stateData.values = configValues.map(item => ({
+    ...item,
+    show_as: item.show_as ? { ...item.show_as } : undefined,
+  }))
+  syncShowAsMapFromValues()
+
+  stateData.sortField = configOrderBy.map(item => item.field)
+  stateData.sortDir = configOrderBy[0]?.direction ?? 'desc'
+  stateData.limitVal = config.limit ?? 1000
+  stateData.having = configHaving.map(item => ({ ...item }))
+  stateData.chartType = config.chart_type ?? 'bar'
+}
+
+async function applyConfigAndQuery(config: PivotConfig) {
+  await withRecommendationSuppressed(async () => {
+    applyPivotConfig(config)
+    await nextTick()
+    await handleQuery({ skipRecommendation: true })
+  })
+}
+
+async function setDefaultValuesSilently(config: PivotConfig) {
+  await withRecommendationSuppressed(() => {
+    applyPivotConfig(config)
+  })
+}
+
+async function resetConfigSilently() {
+  await withRecommendationSuppressed(() => {
+    handleClear()
+  })
+}
+
+function handleSaveConfig() {
+  if (!canSaveConfig.value) {
+    ElMessage.warning('当前报表缺少可保存的名称')
+    return
+  }
+
+  try {
+    const savedItem = saveStoredReportConfig(props.configName ?? '', buildPivotConfig())
+    ElMessage.success(`已保存配置：${savedItem.name}`)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '保存配置失败')
+  }
+}
+
 // ========== 暴露给父组件的方法 ==========
 defineExpose({
-  setDefaultValues: (config: PivotConfig) => {
-    if (config.filters) {
-      stateData.filters = config.filters.map((f, i) => normalizeFilterForUI(f, i + 1))
-      syncFilterSelectOrders()
-      config.filters.forEach(f => {
-        if (isStaticDropdownField(f.field)) loadFilterDropdown(f.field)
-      })
-      const apiField = config.filters.find(f => isApiFilterField(f.field))?.field
-      if (apiField) refreshFilterSelectOptions(apiField)
-      if (config.filters.some(f => isSignalTriggerField(f.field))) {
-        refreshSignalList()
-      }
-      if (config.filters.some(f => f.isSignal) || canLoadSignalFilterDropdown()) {
-        refreshSignalFilterDropdown()
-      }
-    }
-    if (config.axes) stateData.axes = config.axes.map(ensureAxisAggregation)
-    if (config.legend) stateData.legend = config.legend
-    if (config.values) stateData.values = config.values
-    if (config.chart_type) stateData.chartType = config.chart_type
-  },
-  resetConfig: handleClear,
+  setDefaultValues: setDefaultValuesSilently,
+  resetConfig: resetConfigSilently,
+  applyConfigAndQuery,
 })
 
 watch(
@@ -1609,9 +1713,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  if (recommendTimer) {
-    clearTimeout(recommendTimer)
-  }
+  clearRecommendTimer()
   Object.values(apiFilterSearchTimers).forEach(timer => clearTimeout(timer))
 })
 </script>
@@ -1972,19 +2074,30 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   padding-top: 6px;
-  flex-wrap: wrap;
+  margin-bottom: 10px;
+  flex-wrap: nowrap;
 }
 
 .extra-item {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+}
+
+.extra-item--sort {
+  flex: 1;
 }
 
 .extra-item label {
   font-size: 11px;
   color: #606266;
   white-space: nowrap;
+}
+
+.extra-sort-field-select {
+  flex: 1;
+  min-width: 0;
 }
 
 /* HAVING */

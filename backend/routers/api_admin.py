@@ -31,13 +31,13 @@ class RefreshResponse(BaseModel):
 @router.get("/api/fields")
 async def get_fields():
     """获取明细宽表 WIDE_DETAIL 字段列表（固定 8 字段 + 实时 TOP-N 动态信号列）"""
-    return get_fields_grouped(include_wide_detail=True, wide_top_signals=200)
+    return get_fields_grouped()
 
 
 @router.get("/api/schema")
 async def get_schema():
     """获取明细宽表 WIDE_DETAIL Schema Markdown"""
-    return {"schema": get_schema_markdown(top_signals=60)}
+    return {"schema": get_schema_markdown()}
 
 
 @router.post("/api/admin/refresh_wide_detail")

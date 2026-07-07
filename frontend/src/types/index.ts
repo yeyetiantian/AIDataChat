@@ -90,7 +90,6 @@ export interface PivotConfig {
   values: ValueItem[]
   row_filters?: FilterOnAgg[]
   col_filters?: FilterOnAgg[]
-  top_n?: TopN
   order_by?: OrderBy[]
   pagination?: Pagination
   grand_total?: boolean

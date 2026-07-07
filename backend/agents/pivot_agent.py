@@ -1,8 +1,7 @@
-"""LangGraph NL2SQL Agent
+"""LangGraph AI 分析与图表配置 Agent
 
-将用户自然语言转换为 PivotConfig + DuckDB SQL。
-使用 LangChain Structured Output 强制 JSON 结构化输出。
-保留完整链路日志（每个节点的原始输入/输出 + SQL）。
+将用户自然语言转换为 PivotConfig 图表配置（Pivot API 代为执行查询）。
+保留完整链路日志（每个节点的原始输入/输出）。
 
 支持一次生成多种图表：如"各车型和各规则的报警次数"→2个图表。
 
@@ -25,7 +24,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from core.field_registry import get_schema_for_agent
-from core.pivot_sql_builder import execute_pivot
 from llm import get_auth_headers
 from models import PivotConfig, PivotResponse
 
@@ -53,10 +51,6 @@ class AgentOutput(BaseModel):
     intent: Literal["chat", "chart"] = Field(description="chat=普通聊天, chart=图表分析")
     reply: str = Field(description="回复内容")
     # 单图表兼容字段（LLM 可能输出单图，analyze 节点统一转成 charts）
-    pivot_config: Optional[PivotConfig] = Field(None, description="图表配置（单图表时使用）")
-    chart_type: Optional[Literal["bar", "line", "area", "point", "pie", "radar"]] = Field(
-        None, description="图表类型（单图表时使用）"
-    )
     # 多图表字段
     charts: list[ChartItem] = Field(default_factory=list, description="多图表（一次生成多个图表时使用）")
     suggestions: list[str] = Field(default_factory=list, description="建议用户追问的 3 个问题")
@@ -144,10 +138,9 @@ def _get_base_system_prompt() -> str:
         return _base_system_prompt
 
     schema = _get_schema_text()
-    _base_system_prompt = f"""你是数据分析助手，支持普通聊天和图表分析。
+    _base_system_prompt = f"""你是数据分析助手，支持普通聊天和数据透视图表分析。
 
-## 数据库
-你的数据来源是明细宽表 **WIDE_DETAIL**，包含以下字段：
+## 数据字段说明
 
 {schema}
 
@@ -158,6 +151,7 @@ def _get_base_system_prompt() -> str:
 suggestions 字段必须为空列表（无需生成追问）。
 
 ### 2. 图表分析模式
+根据用户的自然语言意图，结合数据透视规则，生成 PivotConfig 图表配置（charts 列表），供 Pivot API 执行查询。
 
 **默认：每个请求只生成一个图表。** 即使请求包含多个维度，也聚合到一个图表中。
 
@@ -168,35 +162,69 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 单图表示例（默认行为）：
 {{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }}
 ]}}
 
 多图表示例（仅当用户明确要求时才使用）：
 {{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }},
-  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 10000 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }},
+  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }}
 ]}}
 
-**修改已有图表**：当用户要求修改（如"改成饼图""只看SUV""按天统计"），只修改当前对话中的**最后一个图表配置**，保持 charts 数量不变。
-
-### ORDER BY 注意事项
-order_by 中的 field 中的 by 必须使用**字段名**（如 "alarm_time"、"vehicle_type"），**不要使用 value 的 id**（如 "val_1"、"val_2"）。
-
 ### 图表字段说明
-- axes: 横轴/行维度字段（GROUP BY），时间字段可设 aggregation: day/month/year
-- legend: 图例字段（PIVOT ON，用于多系列对比）
-- values: 聚合值字段，aggregation: count/sum/avg/min/max/count_distinct
-- filters: WHERE 筛选条件，op: in/eq，value 传数组；可选 select_ts/select_order/filter_type
-- chart_type: bar/line/area/point/pie/radar（时间序列→line，类别对比→bar，占比→pie）
-- having: HAVING 子句过滤聚合后结果，每项 {{field, op, value}}
-- limit: 最大返回条数
 
-### 每个 pivot_config 中的 values 必须有 id 字段（如 "val_1", "val_2"...）
-缺少 id 会导致校验不通过，需要重新生成。
+**axes**（行维度，必填，至少 1 个）
+- field: 字段名（必填）
+- alias: 显示别名（必填，默认显示字段名）
+- aggregation: source / day / month / year（仅时间字段可用，按天/月/年聚合）
+- 示例：{{"field": "vehicle_type", "alias": "车型"}}、{{"field": "alarm_time", "aggregation": "month", "alias": "报警时间"}}
 
-### SQL 要求
-- 固定字段（person/vehicle_type/vehicle/task/rule_name/rule_type/alarm_time/duration_sec）可直接引用
-- 对信号列（如 IBSBatSOC、PrplsnSysAtv）做数值聚合时，使用 TRY_CAST("信号名" AS DOUBLE)"""
+**legend**（列维度/图例，可选）
+- field: 字段名（必填）
+- alias: 显示别名（必填）
+- 用于多系列对比（如按 rule_type 拆分为多条线）
+- 不填时生成单系列图表
+- 约束：字段的唯一值不宜过多（建议 ≤5），否则图表可读性差
+
+**values**（聚合值，必填，至少 1 个）
+- id: 唯一标识，按 val_1、val_2 递增（必填，校验依赖此字段）
+- field: 字段名（必填），支持固定字段和动态信号
+- alias: 显示别名（必填，默认用字段名）
+- expr: 直接嵌入计算表达式，示例：{{"id": "val_1", "expr": "TRY_CAST(\"IBSBatSOC\" AS DOUBLE)", "aggregation": "avg", "alias": "平均 SOC"}}
+- aggregation: count / sum / avg / min / max / count_distinct
+- 约束：count 可用于任意字段；sum/avg/min/max 建议用于数值字段或动态信号列
+
+**filters**（筛选条件，可选）
+- field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
+- op: lt / gt / gte / lte / date_range / between / in
+- value: 数组，如 ["VIN1", "VIN2"] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]
+- filter_type：筛选器类型（可选）
+- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}
+
+**having**（聚合后过滤，可选）
+- field: 聚合字段名
+- op: gt / lt / gte / lte / eq
+- value: 单个值（非数组）
+- 示例：{{"field": "vehicle_type", "op": "gt", "value": 10}}
+
+**order_by**（排序，可选）
+- field: 字段名（必填，如 "alarm_time"、"vehicle_type"）
+- dir: asc / desc
+- 示例：{{"field": "alarm_time", "dir": "desc"}}
+
+**limit**（最大返回条数，可选）
+- 整数，默认 100，最大 10000
+- 示例：100
+
+**chart_type**（图表类型）
+- 可选值：bar / line / area / point / pie / radar
+- 选择规则：类别对比 → bar（柱状图），时间趋势 → line（折线图），占比分布 → pie（饼图），数据点分布 → point（散点图），多维指标对比 → radar（雷达图）
+
+### 约束汇总
+- 每个 pivot_config 中的 values 必须有 id 字段（按 val_1、val_2 递增），缺少 id 会导致校验不通过
+- axes 至少 1 个，values 至少 1 个
+- 所有字段名（field）必须来自上面的数据字段列表，不能编造不存在的字段，如果你遇到不确定或不认识的字段名，一律归类为动态信号列，使用其原始列名即可。
+- 对动态信号列（不在固定字段中的列名）做 sum/avg/min/max 聚合时，系统自动转换数值类型，直接使用列名即可"""
     return _base_system_prompt
 
 
@@ -293,21 +321,10 @@ def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]
 
     支持三种来源：
     1. response.charts（多图表）
-    2. response.pivot_config（单图表兼容）
     3. 空列表（chat 模式）
     """
     if response.charts:
         return [c.model_dump() for c in response.charts]
-
-    pc = response.pivot_config
-    if pc is not None:
-        dumped = pc.model_dump()
-        _normalize_pivot(dumped)
-        return [{
-            "title": "",
-            "pivot_config": dumped,
-            "chart_type": response.chart_type or "bar",
-        }]
 
     return []
 
@@ -458,32 +475,12 @@ def analyze_node(state: AgentState) -> AgentState:
                 logger.error("PydanticOutputParser 解析失败: %s", parse_err)
                 # 最后尝试带标准化的手动解析
                 result = _try_parse_json(raw_content)
-                if result is None:
-                    frag = _extract_json_fragment(raw_content)
-                    if frag:
-                        result = _try_parse_json(frag)
-                if result is None:
-                    raise ValueError(f"LLM 返回无法解析: {raw_content[:200]}")
-                # 手动构建 AgentOutput
-                raw_charts = result.get("charts")
-                if isinstance(raw_charts, list) and len(raw_charts) > 0:
-                    for c in raw_charts:
-                        if isinstance(c, dict) and c.get("pivot_config"):
-                            _normalize_pivot(c["pivot_config"])
-                    response = AgentOutput(
-                        intent=result.get("intent", "chart"),
-                        reply=result.get("reply", ""),
-                        charts=raw_charts,
-                        suggestions=result.get("suggestions", []),
-                    )
-                else:
-                    response = AgentOutput(
-                        intent=result.get("intent", "chart"),
-                        reply=result.get("reply", ""),
-                        pivot_config=_normalize_pivot(result.get("pivot_config")),
-                        chart_type=result.get("chart_type"),
-                        suggestions=result.get("suggestions", []),
-                    )
+                response = AgentOutput(
+                    intent=result.get("intent", "chart"),
+                    reply=result.get("reply", ""),
+                    charts=result.get("charts", []),
+                    suggestions=result.get("suggestions", []),
+                )
 
         if response.intent == "chat":
             state["intent"] = "chat"
@@ -789,7 +786,7 @@ def get_agent() -> Any:
     return _agent
 
 
-async def process_chat(message: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+async def process_chat(message: str) -> dict[str, Any]:
     """处理聊天请求"""
     import uuid
     start = time.time()
@@ -816,7 +813,7 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
 
     state: AgentState = {
         "user_message": message,
-        "conversation_history": history or [],
+        "conversation_history": [],
         "intent": None,
         "charts": [],
         "suggestions": [],
