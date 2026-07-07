@@ -1638,22 +1638,29 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-/* 四象限 2x2 网格 */
+/* 四象限拖拽区 */
 .zones-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+  align-items: stretch;
 }
 
 .zone-card {
   border: 1px solid #ebeef5;
   border-radius: 6px;
-  height: 100px;
+  height: auto;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
 }
 
 .zone-card--filters {
-  height: auto;
-  min-height: 100px;
+  margin-bottom: 6px;
+}
+
+.zone-card.value {
+  margin-top: 6px;
 }
 
 .config-section .section-body {
@@ -1680,12 +1687,14 @@ onBeforeUnmount(() => {
 .zone-body {
   padding: 4px 6px;
   min-height: 28px;
+  flex: 1;
 }
 
 .zone-body.empty {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 60px;
 }
 
 .zone-placeholder {
