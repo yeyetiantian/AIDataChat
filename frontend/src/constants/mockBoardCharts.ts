@@ -24,7 +24,357 @@ function createBaseConfig(partial: Partial<PivotConfig>): PivotConfig {
 }
 
 export function createMockBoardCharts(): MockBoardChart[] {
-  return [
+  const firstMockPieConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: [4523],
+        select_ts: '时间戳',
+        select_order: 1,
+        filter_type: '',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: [15221, 15222, 15223, 15224, 15225, 15226],
+        select_ts: '时间戳',
+        select_order: 1,
+        filter_type: '',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-08-29 00:00:00', '2025-09-03 00:00:00'],
+        select_ts: '时间戳',
+        select_order: 1,
+        filter_type: '',
+      },
+    ],
+    axes: [{ field: 'rule_name', alias: '规则名称', sort: 'desc' }],
+    legend: [],
+    values: [
+      {
+        id: 'val_1',
+        field: 'trigger_time',
+        aggregation: 'count',
+        alias: '报警数量',
+      },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: '报警数量', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'pie',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const secondMockBarConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: ['4523'],
+        select_ts: '时间戳',
+        select_order: 1,
+        filter_type: 'string',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: ['15221', '15222', '15223', '15224', '15225', '15226'],
+        select_ts: '时间戳',
+        select_order: 2,
+        filter_type: 'string',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-08-29 00:00:00', '2025-09-04 23:59:59'],
+        select_ts: '时间戳',
+        select_order: 3,
+        filter_type: 'date',
+      },
+    ],
+    axes: [{ field: 'rule_name', alias: '规则名称' }],
+    legend: [],
+    values: [
+      { id: 'val_1', field: 'EngActStdyStTorq', aggregation: 'avg', alias: 'EngActStdyStTorq' },
+      { id: 'val_2', field: 'VehOdo', aggregation: 'avg', alias: 'VehOdo' },
+      { id: 'val_3', field: 'EngSpd', aggregation: 'avg', alias: 'EngSpd' },
+      { id: 'val_4', field: 'VehSpdAvgDrvn_1', aggregation: 'avg', alias: 'VehSpdAvgDrvn_1' },
+      { id: 'val_5', field: 'HiVltgBatAvgTemp', aggregation: 'avg', alias: 'HiVltgBatAvgTemp' },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: 'EngActStdyStTorq', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'radar',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const thirdMockBarConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: ['4523'],
+        select_ts: '时间戳',
+        select_order: 1,
+        filter_type: 'string',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: ['15221', '15222', '15223', '15224', '15225', '15226'],
+        select_ts: '时间戳',
+        select_order: 2,
+        filter_type: 'string',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-08-29 00:00:00', '2025-09-10 23:59:59'],
+        select_ts: '时间戳',
+        select_order: 3,
+        filter_type: 'date',
+      },
+    ],
+    axes: [{ field: 'trigger_time', alias: '触发日期', aggregation: 'day' }],
+    legend: [{ field: 'rule_name', alias: '规则' }],
+    values: [
+      {
+        id: 'val_1',
+        field: 'trigger_time',
+        aggregation: 'count',
+        alias: '报警数量',
+      },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: '报警数量', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'bar',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const fourthMockPointConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: ['4523'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 1,
+        filter_type: 'string',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: ['15221', '15222', '15223', '15224', '15225', '15226'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 2,
+        filter_type: 'string',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-09-26 00:00:00', '2025-09-26 23:59:59'],
+        select_ts: '1783423295385',
+        select_order: 3,
+        filter_type: 'date',
+      },
+    ],
+    axes: [{ field: 'VehSpdAvgDrvn_1', alias: 'VehSpdAvgDrvn_1' }],
+    legend: [],
+    values: [
+      {
+        id: 'val_5',
+        field: 'HVBSOC_BatSOC',
+        aggregation: 'source' as any,
+        alias: 'HVBSOC_BatSOC',
+      },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: 'HVBSOC_BatSOC', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'point',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const fifthMockAreaConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: ['4523'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 1,
+        filter_type: 'string',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: ['15221', '15222', '15223', '15224', '15225', '15226'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 2,
+        filter_type: 'string',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-09-12 00:00:00', '2025-09-12 23:59:59'],
+        select_ts: '1783423349264',
+        select_order: 3,
+        filter_type: 'date',
+      },
+    ],
+    axes: [
+      {
+        field: 'trigger_time',
+        alias: '\u62a5\u8b66\u65f6\u95f4',
+        aggregation: 'source',
+      },
+    ],
+    legend: [],
+    values: [
+      { id: 'val_1', field: 'HVBSOC_BatSOC', aggregation: 'source' as any, alias: 'HVBSOC_BatSOC' },
+      { id: 'val_2', field: 'VehSpdAvgDrvn_1', aggregation: 'source' as any, alias: 'VehSpdAvgDrvn_1' },
+      { id: 'val_3', field: 'VehOdo', aggregation: 'source' as any, alias: 'VehOdo' },
+      {
+        id: 'val_4',
+        field: 'HiVltgBatMinCellVltg',
+        aggregation: 'source' as any,
+        alias: 'HiVltgBatMinCellVltg',
+      },
+      {
+        id: 'val_5',
+        field: 'MtrBCntrlModeAchvd',
+        aggregation: 'source' as any,
+        alias: 'MtrBCntrlModeAchvd',
+      },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: 'HVBSOC_BatSOC', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'area',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const sixthMockLineConfig: PivotConfig = createBaseConfig({
+    filters: [
+      {
+        field: 'task',
+        op: 'in',
+        value: ['4523'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 1,
+        filter_type: 'string',
+      },
+      {
+        field: 'rule_name',
+        op: 'in',
+        value: ['15221', '15222', '15223', '15224', '15225', '15226'],
+        select_ts: '\u65f6\u95f4\u6233',
+        select_order: 2,
+        filter_type: 'string',
+      },
+      {
+        field: 'trigger_time',
+        op: 'between',
+        value: ['2025-09-12 00:00:00', '2025-09-12 23:59:59'],
+        select_ts: '1783423578729',
+        select_order: 3,
+        filter_type: 'date',
+      },
+    ],
+    axes: [
+      {
+        field: 'trigger_time',
+        alias: '\u62a5\u8b66\u65f6\u95f4',
+        aggregation: 'source',
+      },
+    ],
+    legend: [],
+    values: [
+      {
+        id: 'val_1',
+        field: 'EngActStdyStTorq',
+        aggregation: 'source' as any,
+        alias: 'EngActStdyStTorq',
+      },
+      {
+        id: 'val_2',
+        field: 'MtrBTorqAchvd',
+        aggregation: 'source' as any,
+        alias: 'MtrBTorqAchvd',
+      },
+      {
+        id: 'val_3',
+        field: 'HiVltgBatMinCellVltg',
+        aggregation: 'source' as any,
+        alias: 'HiVltgBatMinCellVltg',
+      },
+      {
+        id: 'val_4',
+        field: 'OtsAirTmpCrVal',
+        aggregation: 'source' as any,
+        alias: 'OtsAirTmpCrVal',
+      },
+      {
+        id: 'val_5',
+        field: 'MtrATorqAchvd',
+        aggregation: 'source' as any,
+        alias: 'MtrATorqAchvd',
+      },
+      {
+        id: 'val_6',
+        field: 'HiVltgBatAvgTemp',
+        aggregation: 'source' as any,
+        alias: 'HiVltgBatAvgTemp',
+      },
+    ],
+    row_filters: [],
+    col_filters: [],
+    having: [],
+    calculated_fields: [],
+    calculated_items: [],
+    order_by: [{ field: 'EngActStdyStTorq', direction: 'desc' }],
+    request_meta: { imported_from: 'query_request', order_by_mode: 'direction' },
+    chart_type: 'line',
+    grand_total: false,
+    subtotals: false,
+    limit: 1000,
+  })
+
+  const charts: MockBoardChart[] = [
     {
       title: '规则报警数量占比',
       description: '模拟数据: 规则名称维度的报警数量占比',
@@ -483,4 +833,13 @@ export function createMockBoardCharts(): MockBoardChart[] {
       ],
     },
   ]
+
+  charts[0].pivotConfig = firstMockPieConfig
+  charts[1].pivotConfig = secondMockBarConfig
+  charts[2].pivotConfig = thirdMockBarConfig
+  charts[3].pivotConfig = fourthMockPointConfig
+  charts[4].pivotConfig = fifthMockAreaConfig
+  charts[5].pivotConfig = sixthMockLineConfig
+
+  return charts.slice(0, 6)
 }
