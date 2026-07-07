@@ -5,12 +5,13 @@
       <p>拖拽字段并点击查询生成图表</p>
     </div>
 
-    <div v-else-if="!props.spec && props.data?.length === 0 && !shouldRenderRadarPlaceholder" class="empty-state">
+    <div v-else-if="!props.spec && props.data?.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>暂无数据</p>
     </div>
 
     <template v-else-if="canRender">
+      <!-- 工具栏 -->
       <div v-if="!props.hideToolbar" class="chart-toolbar">
         <span v-if="props.executionTimeMs != null" class="exec-time">
           耗时 {{ props.executionTimeMs }}ms
@@ -22,33 +23,25 @@
         </div>
       </div>
 
-      <div v-if="chartNotice" class="chart-notice">
-        {{ chartNotice }}
-      </div>
-
+      <!-- 图表容器 -->
       <div ref="vegaContainer" class="vega-container"></div>
     </template>
 
+    <!-- SQL 弹窗 -->
     <el-dialog v-model="showSqlDialog" title="SQL" width="70%" top="5vh" destroy-on-close>
       <pre class="sql-pre">{{ props.sql || '' }}</pre>
     </el-dialog>
 
+    <!-- 数据弹窗 -->
     <el-dialog v-model="showDataDialog" title="查询数据" width="80%" top="5vh" destroy-on-close>
       <el-table
         v-if="props.data"
         :data="props.data"
-        border
-        stripe
-        size="small"
-        max-height="600"
-        style="width: 100%"
+        border stripe size="small" max-height="600" style="width: 100%"
       >
         <el-table-column
-          v-for="col in displayColumns"
-          :key="col"
-          :prop="col"
-          :label="col"
-          min-width="100"
+          v-for="col in displayColumns" :key="col"
+          :prop="col" :label="col" min-width="100"
         />
       </el-table>
     </el-dialog>
@@ -56,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
 
@@ -74,28 +67,6 @@ const props = defineProps<{
   height?: number | string
 }>()
 
-type RadarMetric = {
-  field: string
-  label: string
-}
-
-type RadarPoint = {
-  metric: string
-  dimension: string
-  rawValue: number
-  order: number
-  x: number
-  y: number
-}
-
-type RadarChartState = {
-  notice: string
-  spec: Record<string, any> | null
-}
-
-const DEFAULT_RADAR_DIMENSIONS = ['维度1', '维度2', '维度3', '维度4', '维度5']
-const RADAR_DOMAIN = [-1.25, 1.25]
-
 const chartContainer = ref<HTMLElement | null>(null)
 const vegaContainer = ref<HTMLElement | null>(null)
 const showDataDialog = ref(false)
@@ -105,13 +76,16 @@ const isFullscreen = ref(false)
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let resizeObserver: ResizeObserver | null = null
 
+// 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
   if (props.columns && props.columns.length) return props.columns
   if (props.data && props.data.length) return Object.keys(props.data[0])
   return []
 })
 
-const resolvedChartType = computed(() => props.chartType || props.config?.chart_type || 'bar')
+const hasRenderableSource = computed(() => {
+  return !!props.spec || !!props.data
+})
 
 function resolveFieldName(
   keys: string[],
@@ -134,253 +108,174 @@ function resolveValueFieldNames(keys: string[], values: Array<Record<string, any
     .filter((field): field is string => !!field)
 }
 
-function buildRadarGeometry(dimensions: string[]) {
+function buildRadarSpec(
+  data: Record<string, any>[],
+  axisField: string,
+  axisTitle: string,
+  values: Array<Record<string, any>>,
+  keys: string[],
+) {
+  const dimensions = data
+    .map(row => String(row[axisField] ?? ''))
+    .filter(Boolean)
+
+  if (!dimensions.length || values.length < 2) return null
+
+  const maxValue = Math.max(
+    ...data.flatMap(row => values.map(value => Number(row[resolveFieldName(keys, value)] ?? 0))),
+    1,
+  )
+
   const angleStep = (Math.PI * 2) / dimensions.length
   const ringLevels = [0.25, 0.5, 0.75, 1]
 
-  const ringData = ringLevels.flatMap(level => {
-    const points = dimensions.map((_, index) => {
+  const polygonData = values.flatMap((value) => {
+    const metricField = resolveFieldName(keys, value)
+    const metric = value.alias || metricField
+    const points = data.map((row, index) => {
       const angle = angleStep * index - Math.PI / 2
+      const rawValue = Number(row[metricField] ?? 0)
+      const ratio = maxValue === 0 ? 0 : rawValue / maxValue
       return {
-        ring: `${Math.round(level * 100)}%`,
-        order: index,
-        x: Number((Math.cos(angle) * level).toFixed(6)),
-        y: Number((Math.sin(angle) * level).toFixed(6)),
+        指标: metric,
+        维度: String(row[axisField] ?? ''),
+        原始值: rawValue,
+        排序: index,
+        x: Number((Math.cos(angle) * ratio).toFixed(6)),
+        y: Number((Math.sin(angle) * ratio).toFixed(6)),
       }
     })
 
-    return points.length ? [...points, { ...points[0], order: points.length }] : points
+    return points.length ? [...points, { ...points[0], 排序: points.length }] : points
   })
+
+  const ringData = ringLevels.flatMap(level =>
+    dimensions.flatMap((dimension, index) => {
+      const angle = angleStep * index - Math.PI / 2
+      const point = {
+        圈层: `${Math.round(level * 100)}%`,
+        排序: index,
+        x: Number((Math.cos(angle) * level).toFixed(6)),
+        y: Number((Math.sin(angle) * level).toFixed(6)),
+      }
+      return index === dimensions.length - 1
+        ? [point, { ...point, 排序: dimensions.length, x: 0, y: -level }]
+        : [point]
+    }),
+  )
 
   const axisData = dimensions.map((dimension, index) => {
     const angle = angleStep * index - Math.PI / 2
+    const x = Number((Math.cos(angle) * 1.05).toFixed(6))
+    const y = Number((Math.sin(angle) * 1.05).toFixed(6))
     return {
-      dimension,
+      维度: dimension,
       x1: 0,
       y1: 0,
-      x2: Number((Math.cos(angle) * 1.05).toFixed(6)),
-      y2: Number((Math.sin(angle) * 1.05).toFixed(6)),
+      x2: x,
+      y2: y,
       labelX: Number((Math.cos(angle) * 1.18).toFixed(6)),
       labelY: Number((Math.sin(angle) * 1.18).toFixed(6)),
     }
-  })
-
-  return { ringData, axisData }
-}
-
-function createRadarSpec(
-  axisTitle: string,
-  dimensions: string[],
-  polygonData: RadarPoint[] = [],
-): Record<string, any> {
-  const { ringData, axisData } = buildRadarGeometry(dimensions)
-  const layers: Record<string, any>[] = [
-    {
-      data: { values: ringData },
-      mark: { type: 'line', color: '#e5e7eb', strokeWidth: 1 },
-      encoding: {
-        x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-        y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-        detail: { field: 'ring', type: 'nominal' },
-        order: { field: 'order', type: 'ordinal' },
-      },
-    },
-    {
-      data: { values: axisData },
-      mark: { type: 'rule', color: '#d1d5db', strokeWidth: 1 },
-      encoding: {
-        x: { field: 'x1', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-        y: { field: 'y1', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-        x2: { field: 'x2' },
-        y2: { field: 'y2' },
-      },
-    },
-  ]
-
-  if (polygonData.length) {
-    layers.push(
-      {
-        data: { values: polygonData },
-        mark: { type: 'line', interpolate: 'linear-closed', strokeWidth: 2.2, opacity: 0.9 },
-        encoding: {
-          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-          color: { field: 'metric', type: 'nominal', title: '指标' },
-          detail: { field: 'metric', type: 'nominal' },
-          order: { field: 'order', type: 'ordinal' },
-          tooltip: [
-            { field: 'metric', type: 'nominal', title: '指标' },
-            { field: 'dimension', type: 'nominal', title: axisTitle },
-            { field: 'rawValue', type: 'quantitative', title: '数值' },
-          ],
-        },
-      },
-      {
-        data: { values: polygonData },
-        transform: [{ filter: `datum.order < ${dimensions.length}` }],
-        mark: { type: 'point', filled: true, size: 70 },
-        encoding: {
-          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-          color: { field: 'metric', type: 'nominal', legend: null },
-          tooltip: [
-            { field: 'metric', type: 'nominal', title: '指标' },
-            { field: 'dimension', type: 'nominal', title: axisTitle },
-            { field: 'rawValue', type: 'quantitative', title: '数值' },
-          ],
-        },
-      },
-    )
-  }
-
-  layers.push({
-    data: { values: axisData },
-    mark: { type: 'text', fontSize: 12, fill: '#4b5563', align: 'center', baseline: 'middle' },
-    encoding: {
-      x: { field: 'labelX', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-      y: { field: 'labelY', type: 'quantitative', axis: null, scale: { domain: RADAR_DOMAIN } },
-      text: { field: 'dimension', type: 'nominal' },
-    },
   })
 
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     title: '数据分析',
     width: 'container',
-    height: props.height || 'container',
+    height: 'container',
     background: '#ffffff',
     padding: 24,
     autosize: { type: 'fit', contains: 'padding' },
-    layer: layers,
+    layer: [
+      {
+        data: { values: ringData },
+        mark: { type: 'line', color: '#e5e7eb', strokeWidth: 1 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          detail: { field: '圈层', type: 'nominal' },
+          order: { field: '排序', type: 'ordinal' },
+        },
+      },
+      {
+        data: { values: axisData },
+        mark: { type: 'rule', color: '#d1d5db', strokeWidth: 1 },
+        encoding: {
+          x: { field: 'x1', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y1', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          x2: { field: 'x2' },
+          y2: { field: 'y2' },
+        },
+      },
+      {
+        data: { values: polygonData },
+        mark: { type: 'line', interpolate: 'linear-closed', strokeWidth: 2.2, opacity: 0.9 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          color: { field: '指标', type: 'nominal', title: '指标' },
+          detail: { field: '指标', type: 'nominal' },
+          order: { field: '排序', type: 'ordinal' },
+          tooltip: [
+            { field: '指标', type: 'nominal' },
+            { field: '维度', type: 'nominal', title: axisTitle },
+            { field: '原始值', type: 'quantitative', title: '数值' },
+          ],
+        },
+      },
+      {
+        data: { values: polygonData },
+        transform: [{ filter: `datum.排序 < ${dimensions.length}` }],
+        mark: { type: 'point', filled: true, size: 70 },
+        encoding: {
+          x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          color: { field: '指标', type: 'nominal', legend: null },
+          tooltip: [
+            { field: '指标', type: 'nominal' },
+            { field: '维度', type: 'nominal', title: axisTitle },
+            { field: '原始值', type: 'quantitative', title: '数值' },
+          ],
+        },
+      },
+      {
+        data: { values: axisData },
+        mark: { type: 'text', fontSize: 12, fill: '#4b5563', align: 'center', baseline: 'middle' },
+        encoding: {
+          x: { field: 'labelX', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          y: { field: 'labelY', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
+          text: { field: '维度', type: 'nominal' },
+        },
+      },
+    ],
     config: {
       view: { stroke: null },
     },
   }
 }
 
-function buildRadarState(): RadarChartState | null {
-  if (resolvedChartType.value !== 'radar' || !props.config) return null
-
-  const data = props.data || []
-  const keys = Object.keys(data[0] || {})
-  const axes = props.config.axes || []
-  const values = props.config.values || []
-  const axisField = resolveFieldName(keys, axes[0])
-  const axisTitle = axes[0]?.alias || axisField || '维度'
-  const issues: string[] = []
-
-  const metrics: RadarMetric[] = values
-    .map((value) => {
-      const field = resolveFieldName(keys, value)
-      if (!field) return null
-      return {
-        field,
-        label: value.alias || field,
-      }
-    })
-    .filter((metric): metric is RadarMetric => !!metric)
-
-  const seenDimensions = new Set<string>()
-  const dimensionRows = axisField
-    ? data.flatMap((row) => {
-        const label = String(row[axisField] ?? '').trim()
-        if (!label || seenDimensions.has(label)) return []
-        seenDimensions.add(label)
-        return [{ label, row }]
-      })
-    : []
-  const dimensions = dimensionRows.map(item => item.label)
-  const displayDimensions = dimensions.length ? dimensions : DEFAULT_RADAR_DIMENSIONS
-
-  if (!axisField) {
-    issues.push('缺少维度字段')
-  } else if (!dimensions.length) {
-    issues.push(`维度“${axisTitle}”没有可用数据`)
-  }
-
-  if (metrics.length < 2) {
-    issues.push(`至少需要 2 个数值指标，当前仅 ${metrics.length} 个`)
-  }
-
-  if (issues.length) {
-    return {
-      notice: `雷达图生成条件不足：${issues.join('；')}。已显示空雷达图。`,
-      spec: createRadarSpec(axisTitle, displayDimensions),
-    }
-  }
-
-  const numericValues = dimensionRows.flatMap(({ row }) =>
-    metrics
-      .map(metric => Number(row[metric.field]))
-      .filter(value => Number.isFinite(value))
-      .map(value => Math.max(value, 0)),
-  )
-  const maxValue = numericValues.length ? Math.max(...numericValues) : 0
-
-  if (!maxValue) {
-    return {
-      notice: '雷达图生成条件不足：指标值全部为空、非数值或为 0。已显示空雷达图。',
-      spec: createRadarSpec(axisTitle, displayDimensions),
-    }
-  }
-
-  const angleStep = (Math.PI * 2) / dimensions.length
-  const polygonData = metrics.flatMap((metric) => {
-    const points = dimensionRows.map(({ label, row }, index) => {
-      const angle = angleStep * index - Math.PI / 2
-      const numericValue = Number(row[metric.field])
-      const rawValue = Number.isFinite(numericValue) ? numericValue : 0
-      const ratio = Math.max(rawValue, 0) / maxValue
-
-      return {
-        metric: metric.label,
-        dimension: label,
-        rawValue,
-        order: index,
-        x: Number((Math.cos(angle) * ratio).toFixed(6)),
-        y: Number((Math.sin(angle) * ratio).toFixed(6)),
-      }
-    })
-
-    return points.length ? [...points, { ...points[0], order: points.length }] : points
-  })
-
-  return {
-    notice: '',
-    spec: createRadarSpec(axisTitle, dimensions, polygonData),
-  }
-}
-
-const radarChartState = computed(() => buildRadarState())
-
-const shouldRenderRadarPlaceholder = computed(() => {
-  return resolvedChartType.value === 'radar' && !!radarChartState.value?.spec
-})
-
-const hasRenderableSource = computed(() => {
-  return !!props.spec || !!props.data || shouldRenderRadarPlaceholder.value
-})
-
-const chartNotice = computed(() => radarChartState.value?.notice || '')
-
+/**
+ * 根据 data / config / chartType 构建 Vega-Lite spec
+ */
 function buildVegaSpec(): Record<string, any> | null {
-  if (resolvedChartType.value === 'radar') {
-    return radarChartState.value?.spec || null
-  }
-
-  const data = props.data || []
+  const data = props.data
   const config = props.config
-  if (!data.length || !config) return null
-
-  const keys = Object.keys(data[0] || {})
+  if (!data || !data.length || !config) return null
+  const keys = Object.keys(data[0] || {}) || []
   const axes = config.axes || []
   const values = config.values || []
   const legend = config.legend || []
-  const chartType = resolvedChartType.value
+  const chartType = props.chartType || 'bar'
   const axisField = resolveFieldName(keys, axes[0])
   const axisTitle = axes[0]?.alias || axisField
   const isTemporalAxis = hasTimeAxis(axes[0])
   const valueFieldNames = resolveValueFieldNames(keys, values)
+
+  if (chartType === 'radar') {
+    return buildRadarSpec(data, axisField, axisTitle, values, keys)
+  }
+  
 
   if (chartType === 'point' && values.length >= 2) {
     return {
@@ -437,19 +332,20 @@ function buildVegaSpec(): Record<string, any> | null {
   const xField = axisField
   const xTitle = axisTitle
 
-  let yField = ''
-  let yTitle = ''
-  if (legend.length && data.length) {
-    const axisKeys = new Set(axes.map((axis: any) => axis.alias || axis.field))
-    legend.forEach((item: any) => axisKeys.add(item.alias || item.field))
-    yField = Object.keys(data[0]).find(key => !axisKeys.has(key)) || ''
+  // PIVOT 模式（有 legend）：Y 轴字段从实际数据中检测，而非从 config.field
+  let yField: string
+  let yTitle: string
+  if (legend.length && data && data.length) {
+    const axisKeys = new Set(axes.map((a: any) => a.alias || a.field))
+    if (legend.length) legend.forEach((l: any) => axisKeys.add(l.alias || l.field))
+    yField = Object.keys(data[0]).find(k => !axisKeys.has(k)) || ''
     yTitle = values[0]?.alias || yField
   } else {
     yField = resolveFieldName(keys, values[0])
     yTitle = values[0]?.alias || yField
   }
 
-  const encoding: Record<string, any> = {}
+  const encoding: any = {}
   if (chartType === 'pie') {
     if (xField) encoding.color = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.theta = { field: yField, type: 'quantitative', title: yTitle }
@@ -457,10 +353,10 @@ function buildVegaSpec(): Record<string, any> | null {
     if (xField) encoding.x = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.y = { field: yField, type: 'quantitative', title: yTitle }
     if (legend.length) {
-      const legendField = resolveFieldName(keys, legend[0])
-      encoding.color = { field: legendField, type: 'nominal', title: legend[0].alias || legendField }
+      const lf = resolveFieldName(keys, legend[0])
+      encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
     }
-    if (['line', 'area', 'point'].includes(chartType) && isTemporalAxis && encoding.x) {
+    if (['line', 'area', 'point'].includes(chartType) && isTemporalAxis) {
       encoding.x.type = 'temporal'
     }
   }
@@ -477,7 +373,7 @@ function buildVegaSpec(): Record<string, any> | null {
 }
 
 const canRender = computed(() => {
-  return !!props.spec || !!(props.data && props.data.length > 0 && props.config) || shouldRenderRadarPlaceholder.value
+  return !!props.spec || !!(props.data && props.data.length > 0 && props.config)
 })
 
 function cloneSpec(spec: Record<string, any> | null | undefined) {
@@ -550,18 +446,17 @@ function shouldFallbackToLocalSpec(spec: Record<string, any>, localSpec: Record<
 
 function buildRenderableSpec(): Record<string, any> | null {
   const localSpec = buildVegaSpec()
-  const preferLocalSpec = resolvedChartType.value === 'radar' && !!localSpec
-  let spec = preferLocalSpec
-    ? cloneSpec(localSpec)
-    : props.spec
-      ? cloneSpec(props.spec)
-      : cloneSpec(localSpec)
+  let spec = props.spec
+    ? cloneSpec(props.spec)
+    : cloneSpec(localSpec)
 
   if (!spec) return null
 
   spec = hydrateSpecData(spec)
 
-  if (!preferLocalSpec && props.spec && shouldFallbackToLocalSpec(spec, localSpec)) {
+  // 后端 spec 有时会引用原字段名，和前端实际收到的别名列不一致。
+  // 这种情况下回退到前端用 data + config 重建的 spec，避免只显示坐标轴。
+  if (props.spec && shouldFallbackToLocalSpec(spec, localSpec)) {
     spec = cloneSpec(localSpec)
     if (!spec) return null
     spec = hydrateSpecData(spec)
@@ -577,11 +472,10 @@ function buildRenderableSpec(): Record<string, any> | null {
 function toggleFullscreen() {
   const el = chartContainer.value
   if (!el) return
-
   if (document.fullscreenElement) {
-    void document.exitFullscreen()
+    document.exitFullscreen()
   } else {
-    void el.requestFullscreen()
+    el.requestFullscreen()
   }
 }
 
@@ -617,20 +511,15 @@ function openSqlDialog() {
 }
 
 async function renderChart() {
-  if (!vegaContainer.value) return
-
   const spec = buildRenderableSpec()
-  if (!spec) {
-    vegaContainer.value.innerHTML = ''
-    embedResult.value = null
-    return
-  }
+  if (!spec || !vegaContainer.value) return
 
   try {
     vegaContainer.value.innerHTML = ''
     embedResult.value = null
 
     const plainSpec = JSON.parse(JSON.stringify(spec))
+
     console.log('Vega-Lite spec:', plainSpec)
 
     embedResult.value = await embed(vegaContainer.value, plainSpec, {
@@ -644,8 +533,8 @@ async function renderChart() {
           },
       tooltip: true,
     })
-  } catch (error) {
-    console.error('Vega-Lite 渲染失败:', error)
+  } catch (e) {
+    console.error('Vega-Lite 渲染失败:', e)
   }
 }
 
@@ -689,7 +578,7 @@ watch(
   async () => {
     scheduleRender()
   },
-  { immediate: true },
+  { immediate: true }
 )
 
 onMounted(() => {
@@ -722,6 +611,7 @@ defineExpose({
   exportPng,
   exportSvg,
 })
+
 </script>
 
 <style scoped>
@@ -773,18 +663,6 @@ defineExpose({
   font-size: 12px;
 }
 
-.chart-notice {
-  width: calc(100% - 32px);
-  margin: 0 16px 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid #fdba74;
-  background: #fff7ed;
-  color: #9a3412;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .vega-container {
   flex: 1;
   width: 100%;
@@ -813,13 +691,6 @@ defineExpose({
 .vega-renderer:fullscreen .chart-toolbar {
   padding-left: 0;
   padding-right: 0;
-}
-
-.vega-renderer.is-fullscreen .chart-notice,
-.vega-renderer:fullscreen .chart-notice {
-  width: 100%;
-  margin-left: 0;
-  margin-right: 0;
 }
 
 .sql-pre {

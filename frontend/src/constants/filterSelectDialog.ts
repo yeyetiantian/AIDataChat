@@ -11,7 +11,7 @@ export interface FilterSelectDialogFieldConfig {
 }
 
 /** 筛选器下拉超过该条数时使用弹窗选择 */
-export const FILTER_DROPDOWN_DIALOG_THRESHOLD = 30
+export const FILTER_DROPDOWN_DIALOG_THRESHOLD = 3
 
 /** 各字段弹窗选择配置（未配置则使用筛选器 label 作为单列表头） */
 export const FILTER_SELECT_DIALOG_CONFIG: Record<string, FilterSelectDialogFieldConfig> = {
