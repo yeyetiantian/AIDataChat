@@ -195,7 +195,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 - field: 字段名（必填），支持固定字段和动态信号
 - alias: 显示别名（必填，默认用字段名）
 - expr: 直接嵌入计算表达式，示例：{{"id": "val_1", "expr": "TRY_CAST(\"IBSBatSOC\" AS DOUBLE)", "aggregation": "avg", "alias": "平均 SOC"}}
-- aggregation: count / sum / avg / min / max / count_distinct
+- aggregation: source / count / sum / avg / min / max / count_distinct
 - 约束：count 可用于任意字段；sum/avg/min/max 建议用于数值字段或动态信号列
 
 **filters**（筛选条件，可选）
