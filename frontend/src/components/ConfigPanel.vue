@@ -678,8 +678,8 @@ async function refreshSignalFilterDropdown(keyword?: string) {
       return { name, value: name, label: name }
     })
     const newOptions = dropDown
-      .map(option => row => toFilterDropdownOption(option)(row as FilterSelectDropdownItem))
-      .filter(opt => opt.value !== '')
+      .map(option => toFilterDropdownOption(option))
+      .filter((opt): opt is DropdownOption => opt != null)
     const selectedValues = getAllSignalFilterSelectedValues()
     const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS])
     dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = [
@@ -908,7 +908,7 @@ function applyFilterSelectResponseItem(resp: FilterSelectResponseItem) {
   applyAlarmTimeRange(resp.startAlarmTime, resp.endAlarmTime)
 
   if (isApiDropdownField(resp.field)) {
-    filterDropdownRawCache[resp.field] = (resp.dropDown ?? []) as Record<string, unknown>[]
+    filterDropdownRawCache[resp.field] = (resp.dropDown ?? []) as unknown as Record<string, unknown>[]
     const newOptions = (resp.dropDown ?? [])
       .map(item => toFilterDropdownOption(item, resp.field))
       .filter((opt): opt is DropdownOption => opt != null)
@@ -1056,7 +1056,7 @@ function buildStaticDropdownRaw(field: string): Record<string, unknown>[] {
 function enrichFilterDialogData(field: string): Record<string, unknown>[] {
   if (isApiDropdownField(field)) {
     return (filterDropdownRawCache[field] ?? []).map(row => {
-      const item = row as FilterSelectDropdownItem
+      const item = row as unknown as FilterSelectDropdownItem
       const mapped = toFilterDropdownOption(item, field)
       return mapped
         ? { ...row, value: mapped.value, label: mapped.label }

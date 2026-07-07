@@ -10,9 +10,14 @@ export interface ChatMessage {
   suggestions?: string[]
 }
 
+function generateSessionId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const loading = ref(false)
+  const sessionId = ref(generateSessionId())
 
   async function sendMessage(msg: string) {
     if (!msg.trim() || loading.value) return
@@ -22,7 +27,7 @@ export const useChatStore = defineStore('chat', () => {
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
+        body: JSON.stringify({ message: msg, session_id: sessionId.value }),
       })
 
       if (!resp.ok) {
@@ -31,6 +36,10 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       const resp_data = await resp.json()
+      // 更新 sessionId（首次请求后端返回的）
+      if (resp_data.session_id) {
+        sessionId.value = resp_data.session_id
+      }
       messages.value.push({
         role: 'assistant',
         content: resp_data.reply || '已生成分析配置',
@@ -49,6 +58,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function clearMessages() {
     messages.value = []
+    sessionId.value = generateSessionId()
   }
 
   return { messages, loading, sendMessage, clearMessages }
