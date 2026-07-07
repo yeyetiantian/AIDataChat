@@ -197,7 +197,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 **filters**（筛选条件，可选）
 - field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
 - op: lt / gt / gte / lte / date_range / between / in
-- value: 数组，如 ["VIN1", "VIN2"] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]
+- value: 必须是数组，如 ["VIN1", "VIN2"] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]
 - filter_type：筛选器类型（可选）
 - 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}
 
@@ -295,26 +295,6 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
 
 
 # ---- 数据标准化 ----
-
-def _normalize_pivot(raw: Any) -> dict | None:
-    """确保 pivot_config 的 values 每条都有 id，且 list 字段不会被 LLM 误输出为 dict"""
-    if not isinstance(raw, dict):
-        return None
-    # 确保 list 字段是列表（LLM 可能输出单个 dict）
-    for key in ("legend", "axes", "filters", "values", "row_filters", "col_filters", "calculated_fields", "calculated_items", "order_by"):
-        val = raw.get(key)
-        if isinstance(val, dict):
-            raw[key] = [val]
-        elif val is None:
-            raw[key] = []
-    # 给 values 补充 id
-    values = raw.get("values", [])
-    if isinstance(values, list):
-        for i, v in enumerate(values):
-            if isinstance(v, dict) and not v.get("id"):
-                v["id"] = f"val_{i + 1}"
-    return raw
-
 
 def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]:
     """将 AgentOutput 统一标准化为 state.charts 列表
@@ -786,7 +766,7 @@ def get_agent() -> Any:
     return _agent
 
 
-async def process_chat(message: str) -> dict[str, Any]:
+async def process_chat(message: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """处理聊天请求"""
     import uuid
     start = time.time()
@@ -813,7 +793,7 @@ async def process_chat(message: str) -> dict[str, Any]:
 
     state: AgentState = {
         "user_message": message,
-        "conversation_history": [],
+        "conversation_history": history or [],
         "intent": None,
         "charts": [],
         "suggestions": [],

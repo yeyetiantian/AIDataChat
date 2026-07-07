@@ -94,11 +94,12 @@ class PivotResponse(BaseModel):
 class ChatRequest(BaseModel):
     """AI 对话请求"""
     message: str = Field(..., description="用户自然语言输入")
+    session_id: Optional[str] = Field(None, description="会话 ID（首次留空自动生成，后续传回保持上下文）")
 
 class ChatResponse(BaseModel):
     """AI 对话响应"""
     reply: str = Field(..., description="AI 回复文本")
     charts: list[dict[str, Any]] = Field(default_factory=list, description="图表列表（每个元素含 pivot_config/data/sql/chart_type）")
     suggestions: list[str] = Field(default_factory=list, description="AI 推荐的下一个问题")
-    execution_time_ms: float = Field(0, description="执行耗时")
-    execution_time_ms: float = Field(0, description="执行耗时")
+    session_id: str = Field("", description="会话 ID")
+    execution_time_ms: float = Field(0, description="执行耗时（毫秒）")
