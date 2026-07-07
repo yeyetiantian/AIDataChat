@@ -1,15 +1,30 @@
 <template>
   <div id="app-container">
-    <!-- 顶部栏（含导航菜单） -->
     <header class="app-header">
       <div class="header-left">
         <span class="app-logo">📊</span>
         <h1>柔性报表</h1>
       </div>
       <div class="header-right">
-        <button type="button" class="top-mock-button" title="数据模拟" @click="handleMockBoardData">
-          <el-icon :size="16"><Collection /></el-icon>
+        <button
+          type="button"
+          class="header-action-button header-action-button--primary"
+          title="数据模拟"
+          @click="handleMockBoardData"
+        >
+          <span class="header-action-icon">
+            <el-icon :size="15"><Collection /></el-icon>
+          </span>
           <span>模拟数据展示</span>
+        </button>
+
+        <button
+          type="button"
+          class="header-action-button header-action-button--danger"
+          title="清空看板"
+          @click="handleClearBoard"
+        >
+          <span>清空看板</span>
         </button>
       </div>
     </header>
@@ -29,7 +44,7 @@ import { Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
-async function dispatchBoardEvent(eventName: 'board:mock-data') {
+async function dispatchBoardEvent(eventName: 'board:mock-data' | 'board:clear-all') {
   if (router.currentRoute.value.path !== '/board') {
     await router.push('/board')
     await nextTick()
@@ -39,6 +54,10 @@ async function dispatchBoardEvent(eventName: 'board:mock-data') {
 
 function handleMockBoardData() {
   void dispatchBoardEvent('board:mock-data')
+}
+
+function handleClearBoard() {
+  void dispatchBoardEvent('board:clear-all')
 }
 </script>
 
@@ -96,24 +115,74 @@ html, body, #app {
   gap: 8px;
 }
 
-.top-mock-button {
-  display: flex;
+.header-action-button {
+  appearance: none;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 7px 14px;
-  border: 1px solid #d9ecff;
-  border-radius: 8px;
-  color: #409eff;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 10px;
+  background: #fff;
+  color: #303133;
+  font: inherit;
   font-size: 13px;
   font-weight: 600;
-  background: #f4f9ff;
-  transition: all 0.2s;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
 }
 
-.top-mock-button:hover {
+.header-action-button:hover {
+  transform: translateY(-1px);
+}
+
+.header-action-button:focus-visible {
+  outline: none;
+}
+
+.header-action-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.header-action-button--primary {
+  border-color: #d9ecff;
+  color: #409eff;
+  background: #f4f9ff;
+}
+
+.header-action-button--primary:hover {
   background: #e8f3ff;
   border-color: #bcdcff;
+  box-shadow: 0 4px 10px rgba(64, 158, 255, 0.12);
+}
+
+.header-action-button--primary:focus-visible {
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+}
+
+.header-action-button--danger {
+  border-color: #f3c4c4;
+  color: #d14343;
+  background: #fff5f5;
+}
+
+.header-action-button--danger:hover {
+  background: #ffeaea;
+  border-color: #e9aaaa;
+  box-shadow: 0 4px 10px rgba(209, 67, 67, 0.12);
+}
+
+.header-action-button--danger:focus-visible {
+  box-shadow: 0 0 0 3px rgba(209, 67, 67, 0.18);
 }
 
 .app-body {

@@ -13,16 +13,21 @@
       <aside class="board-sidebar" :class="{ 'is-open': showConfigPanel }">
         <div class="board-sidebar-inner">
           <div class="board-sidebar-content">
-            <ConfigPanel ref="configPanelRef" v-if="showConfigPanel" :api="pivotApi" />
+            <ConfigPanel
+              ref="configPanelRef"
+              v-if="showConfigPanel"
+              :api="pivotApi"
+              :config-name="selectedBoard?.title || ''"
+            />
           </div>
           <div v-if="showConfigPanel" class="board-sidebar-footer">
+            <el-button size="small" type="primary" @click="openImportConfigDialog">导入配置</el-button>
             <el-button size="small" type="danger" @click="closeConfigPanel">关闭配置</el-button>
           </div>
         </div>
       </aside>
     </section>
 
-    <!-- AI 对话按钮 -->
     <el-button
       :type="showAiDialog ? 'success' : 'default'"
       circle
@@ -34,7 +39,6 @@
       <el-icon :size="20"><ChatDotRound /></el-icon>
     </el-button>
 
-    <!-- AI 对话弹窗 -->
     <el-dialog
       v-model="showAiDialog"
       title="AI 对话分析"
@@ -43,6 +47,48 @@
       destroy-on-close
     >
       <AIDialog @save="handleSaveToBoard" @close="showAiDialog = false" />
+    </el-dialog>
+
+    <el-dialog
+      v-model="importDialogVisible"
+      title="导入配置"
+      width="560px"
+      destroy-on-close
+    >
+      <div v-if="savedReportConfigs.length === 0" class="config-import-empty">
+        暂无已保存配置
+      </div>
+      <div v-else class="config-import-list">
+        <button
+          v-for="item in savedReportConfigs"
+          :key="item.id"
+          type="button"
+          class="config-import-item"
+          :class="{ 'is-active': selectedImportConfigId === item.id }"
+          @click="selectedImportConfigId = item.id"
+        >
+          <div class="config-import-item-main">
+            <span class="config-import-name">{{ item.name }}</span>
+            <span class="config-import-time">{{ formatSavedConfigTime(item.savedAt) }}</span>
+          </div>
+          <el-tag v-if="selectedImportConfigId === item.id" size="small" type="primary">已选择</el-tag>
+        </button>
+      </div>
+
+      <template #footer>
+        <el-button
+          type="danger"
+          plain
+          :disabled="savedReportConfigs.length === 0"
+          @click="handleClearStoredConfigs"
+        >
+          清空配置
+        </el-button>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedImportConfigId" @click="handleImportConfig">
+          导入配置
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -59,18 +105,26 @@ import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
 import { createMockBoardCharts } from '@/constants/mockBoardCharts'
 import { ChatDotRound } from '@element-plus/icons-vue'
+import {
+  clearStoredReportConfigs,
+  clonePivotConfig,
+  loadStoredReportConfigs,
+  type StoredReportConfig,
+} from '@/utils/reportConfigStorage'
 
 const chartStore = useChartStore()
 
 type ConfigPanelHandle = {
-  setDefaultValues: (config: any) => void
-  resetConfig: () => void
+  setDefaultValues: (config: PivotConfig) => Promise<void>
+  resetConfig: () => Promise<void>
+  applyConfigAndQuery: (config: PivotConfig) => Promise<void>
 }
 
-type ToggleBoardCard = (SavedChart & { isPlaceholder?: false }) | {
+type ToggleBoardCard = (SavedChart & { isPlaceholder?: false, slotIndex: number }) | {
   id: string | number
   pivot_config: any
   chart_type: string
+  slotIndex: number
   isPlaceholder?: boolean
 }
 
@@ -78,6 +132,9 @@ const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
 const selectedBoardKey = ref<string | number | null>(null)
 const configPanelRef = ref<ConfigPanelHandle | null>(null)
+const importDialogVisible = ref(false)
+const savedReportConfigs = ref<StoredReportConfig[]>([])
+const selectedImportConfigId = ref('')
 const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
 
 function createEmptyBoardConfig(): PivotConfig {
@@ -97,6 +154,73 @@ function createEmptyBoardConfig(): PivotConfig {
 function closeConfigPanel() {
   showConfigPanel.value = false
   selectedBoardKey.value = null
+}
+
+function openImportConfigDialog() {
+  savedReportConfigs.value = loadStoredReportConfigs()
+  selectedImportConfigId.value = savedReportConfigs.value[0]?.id ?? ''
+  importDialogVisible.value = true
+}
+
+function formatSavedConfigTime(value: string) {
+  const time = new Date(value)
+  if (Number.isNaN(time.getTime())) return value
+  return time.toLocaleString('zh-CN', { hour12: false })
+}
+
+async function handleImportConfig() {
+  const selectedConfig = savedReportConfigs.value.find(item => item.id === selectedImportConfigId.value)
+  if (!selectedConfig) {
+    ElMessage.warning('请选择一条配置')
+    return
+  }
+
+  if (!configPanelRef.value) {
+    ElMessage.warning('配置面板未就绪')
+    return
+  }
+
+  const importedConfig = clonePivotConfig(selectedConfig.config)
+  await configPanelRef.value.applyConfigAndQuery(importedConfig)
+
+  if (selectedBoard.value) {
+    await chartStore.updateChart(selectedBoard.value.id, {
+      title: selectedConfig.name,
+    })
+  }
+
+  importDialogVisible.value = false
+  ElMessage.success(`已导入配置：${selectedConfig.name}`)
+}
+
+async function handleClearStoredConfigs() {
+  if (savedReportConfigs.value.length === 0) {
+    ElMessage.info('暂无可清空的配置')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '确定要清空当前所有已保存的配置吗？清空后不可恢复。',
+      '确认清空配置',
+      {
+        confirmButtonText: '确认清空',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  try {
+    clearStoredReportConfigs()
+    savedReportConfigs.value = []
+    selectedImportConfigId.value = ''
+    ElMessage.success('已清空当前所有缓存配置')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '清空配置失败')
+  }
 }
 
 function toFilterValueArray(value: unknown) {
@@ -180,7 +304,7 @@ async function pivotApi(config: any) {
     await chartStore.updateChart(selectedBoard.value.id, {
       pivot_config: config,
       chart_type: config?.chart_type || 'bar',
-      vega_spec: result.vega_spec || null,
+      vega_spec: null,
       data: result.data || [],
     })
   } catch (e: any) {
@@ -204,7 +328,7 @@ async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | '
   showAiDialog.value = false
 }
 
-async function createEmptyBoard() {
+async function createEmptyBoard(preferredSlot?: number) {
   const created = await chartStore.saveChart(
     '空白看板',
     createEmptyBoardConfig(),
@@ -212,6 +336,7 @@ async function createEmptyBoard() {
     'bar',
     null,
     null,
+    preferredSlot,
   )
 
   if (!created) {
@@ -231,23 +356,23 @@ async function syncConfigPanel(chart: SavedChart | null) {
   if (!configPanelRef.value) return
 
   if (!chart) {
-    configPanelRef.value.resetConfig()
+    await configPanelRef.value.resetConfig()
     return
   }
 
   if (chart.pivot_config) {
-    configPanelRef.value.setDefaultValues(chart.pivot_config)
+    await configPanelRef.value.setDefaultValues(chart.pivot_config)
     return
   }
 
-  configPanelRef.value.resetConfig()
+  await configPanelRef.value.resetConfig()
 }
 
 async function handleToggleConfig(chart: ToggleBoardCard) {
   if (chartStore.loading) return
 
   if (chart.isPlaceholder) {
-    await createEmptyBoard()
+    await createEmptyBoard(chart.slotIndex)
     return
   }
 
@@ -279,13 +404,41 @@ async function clearAllCharts() {
   for (const chart of chartsToDelete) {
     const deleted = await chartStore.deleteChart(chart.id)
     if (!deleted) {
-      ElMessage.error(chartStore.error || `删除看板「${chart.title || chart.id}」失败`)
+      ElMessage.error(chartStore.error || `删除看板“${chart.title || chart.id}”失败`)
       return false
     }
   }
 
   await chartStore.fetchCharts()
   return true
+}
+
+async function handleClearBoardRequest() {
+  await chartStore.fetchCharts()
+
+  if (chartStore.charts.length === 0) {
+    ElMessage.info('当前没有可清空的看板')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '确定要清空当前所有看板吗？清空后不可恢复。',
+      '确认清空看板',
+      {
+        confirmButtonText: '确认清空',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  const cleared = await clearAllCharts()
+  if (!cleared) return
+
+  ElMessage.success('已清空当前所有看板')
 }
 
 async function handleMockDataRequest() {
@@ -349,10 +502,12 @@ async function handleMockDataRequest() {
 
 onMounted(() => {
   window.addEventListener('board:mock-data', handleMockDataRequest)
+  window.addEventListener('board:clear-all', handleClearBoardRequest)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('board:mock-data', handleMockDataRequest)
+  window.removeEventListener('board:clear-all', handleClearBoardRequest)
 })
 </script>
 
@@ -419,6 +574,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 0 0 4px;
   border-top: 1px solid #e4e7ed;
   padding-top: 10px;
@@ -428,8 +584,70 @@ onBeforeUnmount(() => {
   position: fixed;
   bottom: 24px;
   z-index: 1000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   transition: right 0.24s ease;
+}
+
+.config-import-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: #909399;
+  font-size: 14px;
+}
+
+.config-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.config-import-item {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.config-import-item:hover {
+  border-color: #409eff;
+}
+
+.config-import-item.is-active {
+  border-color: #409eff;
+  background: #ecf5ff;
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.16);
+}
+
+.config-import-item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.config-import-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.config-import-time {
+  font-size: 12px;
+  color: #909399;
 }
 
 @media (max-width: 1100px) {
