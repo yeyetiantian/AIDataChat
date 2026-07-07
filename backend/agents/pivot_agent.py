@@ -183,7 +183,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 - aggregation: source / day / month / year（仅时间字段可用，按天/月/年聚合）
 - 示例：{{"field": "vehicle_type", "alias": "车型"}}、{{"field": "alarm_time", "aggregation": "month", "alias": "报警时间"}}
 
-**legend**（列维度/图例，可选, 如果用户没指定，不要填写）
+**legend**（列维度/图例，【图例默认不指定，除非用户明确指定某种图例】）
 - field: 字段名（必填）
 - alias: 显示别名（必填）
 - 用于多系列对比（如按 rule_type 拆分为多条线）
@@ -200,20 +200,20 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 **filters**（筛选条件，可选）
 - field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
-- value: 必须是数组，如 ["VIN1", "VIN2"] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]，如果value中的值是数字，不要加引号，如 [1, 2, 3]
-- op: lt / gt / gte / lte / date_range / between / in (如果value是非时间的数组，op必须是 in)
+- value: 必须是数组，如 ["VIN1", "VIN2"] / [4523] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]；数值不要加引号
+- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】 (如果value是非时间的数组，op必须是 in)
 - filter_type：筛选器类型（可选）
-- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}、{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}、{{"field": "task", "op": "in", "value": [4523], "filter_type": ""}}
+- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}/{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}/{{"field": "task", "op": "in", "value": [4523], "filter_type": ""}}
 
 **having**（聚合后过滤，可选）
 - field: 聚合字段名
-- op: gt / lt / gte / lte / eq
+- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】
 - value: 单个值（非数组）
 - 示例：{{"field": "vehicle_type", "op": "gt", "value": 10}}
 
 **order_by**（排序，可选）
 - field: 字段名（必填，如 "alarm_time"、"vehicle_type"）
-- dir: asc / desc
+- dir: 只能在这里面选择【asc / desc】
 - 示例：{{"field": "alarm_time", "dir": "desc"}}
 
 **limit**（最大返回条数，可选）

@@ -79,7 +79,7 @@ class PivotConfig(BaseModel):
     chart_type: Optional[str] = Field(None, description="图表类型：bar/line/area/point/pie/radar")
     grand_total: bool = Field(False, description="是否显示总计")
     subtotals: bool = Field(False, description="是否显示小计")
-    limit: int = Field(100, description="无过滤时最大返回条数", ge=1, le=100)
+    limit: int = Field(1000, description="无过滤时最大返回条数", ge=1, le=1000)
 
 class PivotResponse(BaseModel):
     """表 API 响应"""
