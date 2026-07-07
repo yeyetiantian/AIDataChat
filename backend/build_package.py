@@ -121,10 +121,9 @@ def _ensure_data_dir() -> None:
     fields_file = data_dir / "wide_fields.json"
     if not fields_file.exists():
         import json as _json
-        from core.field_registry import WIDE_DETAIL_FIXED_FIELDS
-        default_fields = [f.model_dump() for f in WIDE_DETAIL_FIXED_FIELDS]
+        default_fields = []
         fields_file.write_text(_json.dumps(default_fields, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[build] 创建默认 {fields_file}（12 个固定字段）")
+        print(f"[build] 创建默认空 {fields_file}")
 
 
 def run_pyinstaller() -> None:

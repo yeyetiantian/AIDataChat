@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 async def chat_query(request: ChatRequest):
     """AI 对话式分析"""
     try:
-        result = await process_chat(request.message, request.history)
+        result = await process_chat(request.message)
         return ChatResponse(**result)
     except Exception as e:
         logger.error("聊天分析失败: %s", e, exc_info=True)

@@ -325,29 +325,19 @@ class PivotSQLBuilder:
         # PIVOT 模式下 value id → 实际列名的映射（构建 PIVOT 时填充）
         self._pivot_value_col_map: dict[str, str] = {}
 
-        # =============== 宽表模式 (明细宽表) 判定 ===============
+        # =============== 宽表模式判定 ===============
         from core.field_registry import (
-            WIDE_DETAIL_FIXED_KEYS,
+            get_fixed_field_names,
         )
-        # 已知非信号列 = 宽表固定 12 字段
-        self._fixed_wide_keys = set(WIDE_DETAIL_FIXED_KEYS)
+        self._fixed_wide_keys = get_fixed_field_names()
         self._all_fields: set[str] = self._collect_fields()
-        # 明细宽表模式判定：所有引用列中，只要有一个是固定宽表列，就用宽表模式
-        self.use_wide_detail: bool = bool(self._all_fields & self._fixed_wide_keys)
-        # 宽表中需要查询的信号名集合：不在 12 个固定列里的，都视为信号列
-        #（宽表已预构建全部信号列，按名直接查询即可）
+        # WIDE_DETAIL 宽表已不再构建，始终使用源表 JOIN 模式
+        self.use_wide_detail: bool = False
+        # 信号列名集合（供后续逻辑识别动态列）
         self.wide_signal_names: set[str] = {
             f for f in self._all_fields
             if f not in self._fixed_wide_keys
         }
-        if self.use_wide_detail:
-            logger.info(
-                "命中明细宽表模式：固定列 %s 个, 信号列 %s 个 (%s)",
-                len(self._all_fields & self._fixed_wide_keys),
-                len(self.wide_signal_names),
-                ", ".join(sorted(self.wide_signal_names)[:10])
-                + ("..." if len(self.wide_signal_names) > 10 else ""),
-            )
 
     def _collect_fields(self) -> set[str]:
         s: set[str] = set()
@@ -434,12 +424,7 @@ class PivotSQLBuilder:
         return full_sql, []
 
     def _build_base_cte(self) -> str:
-        """Step 1: Base CTE
-        - 明细宽表模式 (use_wide_detail=True): 构建 _wide_base + _wide_sig + _wide_pivoted 三层 CTE 得到 wide 字段
-        - 源表模式 (默认): 用显式列 SELECT + 6 表 LEFT JOIN，别名与 field_registry 完全对齐
-        """
-        if self.use_wide_detail:
-            return self._build_wide_base_cte()
+        """Step 1: Base CTE — 源表 JOIN 模式（用显式列 SELECT + 6 表 LEFT JOIN）"""
         return self._build_legacy_base_cte()
 
     def _build_legacy_base_cte(self) -> str:

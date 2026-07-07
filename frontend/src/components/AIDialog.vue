@@ -31,18 +31,28 @@
                       <el-icon :size="16"><Picture /></el-icon>
                     </el-button>
                   </el-tooltip>
-                  <!-- <el-tooltip content="查看数据" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openChartData(chart.id)">
+                  <el-tooltip content="查看数据" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openDataDialog(chart)">
                       <el-icon :size="16"><View /></el-icon>
                     </el-button>
-                  </el-tooltip> -->
+                  </el-tooltip>
+                  <el-tooltip content="查看配置" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openConfigDialog(chart)">
+                      <el-icon :size="16"><Operation /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="查看SQL" placement="top">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openSqlDialog(chart)">
+                      <el-icon :size="16"><Orange /></el-icon>
+                    </el-button>
+                  </el-tooltip>
                   <el-tooltip content="全屏" placement="top">
                     <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(`chat_${ci}`)">
                       <el-icon :size="16"><FullScreen /></el-icon>
                     </el-button>
                   </el-tooltip>
                   <el-tooltip content="保存到看板" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="confirmSave(chart)">
+                    <el-button text circle class="action-btn action-btn-primary" @click="openSaveDialog(chart, ci)">
                       <el-icon :size="16"><PieChart /></el-icon>
                     </el-button>
                   </el-tooltip>
@@ -97,29 +107,40 @@
       </el-button>
     </div>
 
-    <!-- 保存确认弹窗 -->
-    <el-dialog v-model="showSaveDialog" title="保存到看板" width="400px">
-      <el-form label-position="top">
-        <el-form-item label="图表名称">
-          <el-input v-model="saveTitle" placeholder="输入图表名称" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="saveDesc" type="textarea" :rows="2" placeholder="可选" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showSaveDialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="confirmSave">保存</el-button>
-      </template>
-    </el-dialog>
+    <ChartDataDialog
+      v-model:visible="showDataDialog"
+      :data="selectedChart?.data"
+      :title="selectedChart ? `${selectedChart.title || '图表'} - 数据` : '查看数据'"
+    />
+    <ChartSqlDialog
+      v-model:visible="showConfigDialog"
+      :content="configContent"
+      title="查看配置"
+      lang="json"
+    />
+    <ChartSqlDialog
+      v-model:visible="showSqlDialog"
+      :content="selectedChart?.sql"
+      :title="selectedChart ? `${selectedChart.title || '图表'} - SQL` : '查看SQL'"
+      lang="sql"
+    />
+    <SaveToBoardDialog
+      v-model:visible="showSaveDialog"
+      :chart="selectedSaveChart"
+      :index="selectedSaveIndex"
+      @save="handleSaveToBoard"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { computed, ref, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatLineSquare, FullScreen, Picture, PieChart, Promotion, View, WarningFilled } from '@element-plus/icons-vue'
+import { ChatLineSquare, FullScreen, Picture, PieChart, Promotion, View, WarningFilled, Operation, Orange } from '@element-plus/icons-vue'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
+import ChartDataDialog from './ChartDataDialog.vue'
+import ChartSqlDialog from './ChartSqlDialog.vue'
+import SaveToBoardDialog from './SaveToBoardDialog.vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
 import type { PivotConfig } from '@/types'
@@ -146,17 +167,27 @@ type ChatChart = {
   chart_type?: string
   vega_spec?: Record<string, any> | null
   data?: Record<string, any>[] | null
+  sql?: string | null
 }
 
 const input = ref('')
 const messagesRef = ref<HTMLElement | null>(null)
-const showSaveDialog = ref(false)
-const saveTitle = ref('')
-const saveDesc = ref('')
-const saving = ref(false)
-const savingMessage = ref<any>(null)
 const rendererRefs = ref<Record<string, ChartRendererHandle | null>>({})
 const batchSaving = ref<Record<string, boolean>>({})
+
+// 弹窗状态
+const showSaveDialog = ref(false)
+const showDataDialog = ref(false)
+const showConfigDialog = ref(false)
+const showSqlDialog = ref(false)
+const selectedChart = ref<ChatChart | null>(null)
+const selectedSaveChart = ref<ChatChart | null>(null)
+const selectedSaveIndex = ref(0)
+
+const configContent = computed(() => {
+  if (!selectedChart.value?.pivot_config) return '-- 无配置'
+  return JSON.stringify(selectedChart.value.pivot_config, null, 2)
+})
 
 const suggestions = [
   '各车辆触发次数占比',
@@ -197,8 +228,37 @@ function setRendererRef(id: string, instance: any) {
   rendererRefs.value[id] = null
 }
 
-function openChartData(id: string) {
-  rendererRefs.value[id]?.openDataDialog()
+function openDataDialog(chart: ChatChart) {
+  selectedChart.value = chart
+  showDataDialog.value = true
+}
+
+function openConfigDialog(chart: ChatChart) {
+  selectedChart.value = chart
+  showConfigDialog.value = true
+}
+
+function openSqlDialog(chart: ChatChart) {
+  selectedChart.value = chart
+  showSqlDialog.value = true
+}
+
+function openSaveDialog(chart: ChatChart, index: number) {
+  selectedSaveChart.value = chart
+  selectedSaveIndex.value = index
+  showSaveDialog.value = true
+}
+
+function handleSaveToBoard(payload: {
+  title: string
+  description: string
+  pivot_config: PivotConfig
+  chart_type: string
+  vega_spec: any
+  data: any
+}) {
+  emit('save', payload)
+  showSaveDialog.value = false
 }
 
 function exportChartPng(id: string, title: string) {
@@ -274,38 +334,13 @@ function onSuggest(text: string) {
   chatStore.sendMessage(text)
 }
 
-function saveChartToBoard(chart: any, index: number) {
-  savingMessage.value = chart
-  saveTitle.value = chart.title || `图表 ${index + 1}`
-  saveDesc.value = ''
-  showSaveDialog.value = true
-}
-
-async function confirmSave(chart: any) {
-  if (!chart) return
-  saving.value = true
-  try {
-    emit('save', {
-      title: chart.title,
-      description: '',
-      pivot_config: (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
-      chart_type: chart.chart_type || 'bar',
-      vega_spec: chart.vega_spec || null,
-      data: chart.data || null,
-    })
-    showSaveDialog.value = false
-  } finally {
-    saving.value = false
+// 滚动到底部
+watch(() => chatStore.messages.length, async () => {
+  await nextTick()
+  if (messagesRef.value) {
+    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
   }
-}
-
-// // 滚动到底部
-// watch(() => chatStore.messages.length, async () => {
-//   await nextTick()
-//   if (messagesRef.value) {
-//     messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-//   }
-// })
+})
 </script>
 
 <style scoped>
