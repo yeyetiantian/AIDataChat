@@ -22,6 +22,7 @@
           </div>
           <div v-if="showConfigPanel" class="board-sidebar-footer">
             <el-button size="small" type="primary" @click="openImportConfigDialog">导入配置</el-button>
+            <el-button size="small" @click="openImportJsonDialog">导入 JSON</el-button>
             <el-button size="small" type="danger" @click="closeConfigPanel">关闭配置</el-button>
           </div>
         </div>
@@ -90,6 +91,31 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="importJsonDialogVisible"
+      title="导入 JSON"
+      width="640px"
+      destroy-on-close
+    >
+      <div class="config-import-json-tip">
+        粘贴实际查询请求 JSON，系统会反向生成当前配置面板，回显后自动执行“加载报表数据”。
+      </div>
+      <el-input
+        v-model="importJsonText"
+        type="textarea"
+        :rows="16"
+        resize="none"
+        placeholder="请粘贴请求 JSON"
+      />
+
+      <template #footer>
+        <el-button @click="importJsonDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleImportJson">
+          导入并加载
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -111,6 +137,7 @@ import {
   loadStoredReportConfigs,
   type StoredReportConfig,
 } from '@/utils/reportConfigStorage'
+import { normalizeImportedPivotRequest } from '@/utils/pivotConfigImport'
 
 const chartStore = useChartStore()
 
@@ -133,6 +160,8 @@ const showConfigPanel = ref(false)
 const selectedBoardKey = ref<string | number | null>(null)
 const configPanelRef = ref<ConfigPanelHandle | null>(null)
 const importDialogVisible = ref(false)
+const importJsonDialogVisible = ref(false)
+const importJsonText = ref('')
 const savedReportConfigs = ref<StoredReportConfig[]>([])
 const selectedImportConfigId = ref('')
 const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
@@ -160,6 +189,11 @@ function openImportConfigDialog() {
   savedReportConfigs.value = loadStoredReportConfigs()
   selectedImportConfigId.value = savedReportConfigs.value[0]?.id ?? ''
   importDialogVisible.value = true
+}
+
+function openImportJsonDialog() {
+  importJsonText.value = ''
+  importJsonDialogVisible.value = true
 }
 
 function formatSavedConfigTime(value: string) {
@@ -191,6 +225,40 @@ async function handleImportConfig() {
 
   importDialogVisible.value = false
   ElMessage.success(`已导入配置：${selectedConfig.name}`)
+}
+
+async function handleImportJson() {
+  if (!configPanelRef.value) {
+    ElMessage.warning('配置面板未就绪')
+    return
+  }
+
+  const raw = importJsonText.value.trim()
+  if (!raw) {
+    ElMessage.warning('请先粘贴 JSON 内容')
+    return
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    ElMessage.error('JSON 解析失败，请检查格式')
+    return
+  }
+
+  try {
+    const { config, warnings } = normalizeImportedPivotRequest(parsed)
+    await configPanelRef.value.applyConfigAndQuery(config)
+    importJsonDialogVisible.value = false
+    importJsonText.value = ''
+    ElMessage.success('JSON 配置已导入并加载')
+    if (warnings.length > 0) {
+      ElMessage.warning(warnings.join('；'))
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '导入 JSON 失败')
+  }
 }
 
 async function handleClearStoredConfigs() {
@@ -248,6 +316,9 @@ function toQueryFilterValue(filter: { filter_type?: string; op: string; value: u
 }
 
 function toBoardPivotRequest(config: PivotConfig) {
+  const orderByMode = config.request_meta?.order_by_mode
+  const normalizedOrderBy = config.order_by ?? []
+
   return {
     filters: (config.filters ?? []).map((filter, index) => ({
       field: filter.field,
@@ -273,8 +344,21 @@ function toBoardPivotRequest(config: PivotConfig) {
       alias: item.alias,
       ...(item.show_as ? { show_as: item.show_as } : {}),
     })),
+    row_filters: config.row_filters ?? [],
+    col_filters: config.col_filters ?? [],
+    ...(normalizedOrderBy.length > 0
+      ? {
+          order_by: orderByMode === 'direction'
+            ? normalizedOrderBy[0]?.direction ?? 'desc'
+            : normalizedOrderBy.map(item => ({ field: item.field, direction: item.direction })),
+        }
+      : {}),
+    ...(config.pagination ? { pagination: { ...config.pagination } } : {}),
     limit: config.limit ?? 1000,
     having: config.having ?? [],
+    ...(config.top_n ? { top_n: { ...config.top_n } } : {}),
+    calculated_fields: config.calculated_fields ?? [],
+    calculated_items: config.calculated_items ?? [],
     chart_type: config.chart_type ?? 'bar',
     grand_total: config.grand_total ?? false,
     subtotals: config.subtotals ?? false,
@@ -648,6 +732,13 @@ onBeforeUnmount(() => {
 .config-import-time {
   font-size: 12px;
   color: #909399;
+}
+
+.config-import-json-tip {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
 }
 
 @media (max-width: 1100px) {

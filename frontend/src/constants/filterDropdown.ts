@@ -1,5 +1,5 @@
 /** 筛选器时间类型字段（显示比较运算符 + 日期选择器） */
-export const TIME_FILTER_FIELDS = ['condition_met_time', 'alarm_time'] as const
+export const TIME_FILTER_FIELDS = ['condition_met_time', 'alarm_time', 'trigger_time'] as const
 
 /** 筛选器数字类型字段（显示比较运算符 + 数字输入，保留一位小数） */
 export const NUMERIC_FILTER_FIELDS = ['duration_sec', 'freeze_frame'] as const
@@ -7,8 +7,8 @@ export const NUMERIC_FILTER_FIELDS = ['duration_sec', 'freeze_frame'] as const
 /** 筛选器字符串类型字段（显示比较运算符 + 手动输入） */
 export const STRING_FILTER_FIELDS = ['expression', 'alarm_value'] as const
 
-/** 筛选器联动接口字段（task / rule_name / vehicle / alarm_time） */
-export const API_FILTER_FIELDS = ['task', 'rule_name', 'vehicle', 'alarm_time'] as const
+/** 筛选器联动接口字段（task / rule_name / vehicle / alarm_time / trigger_time） */
+export const API_FILTER_FIELDS = ['task', 'rule_name', 'vehicle', 'alarm_time', 'trigger_time'] as const
 
 /** 筛选器联动接口下拉字段 */
 export const API_DROPDOWN_FILTER_FIELDS = ['task', 'rule_name', 'vehicle'] as const

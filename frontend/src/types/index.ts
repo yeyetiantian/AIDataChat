@@ -83,11 +83,17 @@ export interface CalculatedItem {
   formula: string
 }
 
+export interface RequestMeta {
+  imported_from?: 'query_request'
+  order_by_mode?: 'array' | 'direction'
+}
+
 export interface PivotConfig {
   filters: FilterItem[]
   axes: AxisItem[]
   legend: LegendItem[]
   values: ValueItem[]
+  top_n?: TopN
   row_filters?: FilterOnAgg[]
   col_filters?: FilterOnAgg[]
   order_by?: OrderBy[]
@@ -99,6 +105,7 @@ export interface PivotConfig {
   having?: FilterOnAgg[]
   calculated_fields?: CalculatedField[]
   calculated_items?: CalculatedItem[]
+  request_meta?: RequestMeta
 }
 
 export interface RecommendChartItem {
