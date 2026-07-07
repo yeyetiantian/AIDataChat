@@ -149,6 +149,7 @@
                       @blur="() => onFilterFieldChange(item)"
                     />
                   </div>
+                  
                 </template>
                 <template v-else-if="isStringFilterField(item.field)">
                   <el-select
@@ -425,9 +426,15 @@ import type {
   FieldDef,
   ZoneType,
   FilterItem,
+  FilterOnAgg,
   AxisItem,
   LegendItem,
   ValueItem,
+  TopN,
+  Pagination,
+  CalculatedField,
+  CalculatedItem,
+  RequestMeta,
   PivotConfig,
   RecommendChartResponse,
 } from '@/types'
@@ -461,6 +468,7 @@ import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
 import FilterSelectDialog from '@/components/FilterSelectDialog.vue'
 import { saveStoredReportConfig } from '@/utils/reportConfigStorage'
+import { injectExtraImportFields } from '@/utils/pivotConfigImport'
 
 interface DropdownOption {
   label: string
@@ -511,8 +519,17 @@ const stateData = reactive({
   sortField: [] as string[],
   sortDir: 'desc' as string,
   limitVal: 1000,
-  having: [] as { field: string; op: string; value: any }[],
+  having: [] as FilterOnAgg[],
   chartType: 'bar' as string,
+  rowFilters: [] as FilterOnAgg[],
+  colFilters: [] as FilterOnAgg[],
+  pagination: undefined as Pagination | undefined,
+  grandTotal: false,
+  subtotals: false,
+  topN: undefined as TopN | undefined,
+  calculatedFields: [] as CalculatedField[],
+  calculatedItems: [] as CalculatedItem[],
+  requestMeta: undefined as RequestMeta | undefined,
   // 搜索
   search: '',
   // 显示方式
@@ -678,8 +695,8 @@ async function refreshSignalFilterDropdown(keyword?: string) {
       return { name, value: name, label: name }
     })
     const newOptions = dropDown
-      .map(option => row => toFilterDropdownOption(option)(row as FilterSelectDropdownItem))
-      .filter(opt => opt.value !== '')
+      .map(option => toFilterDropdownOption(option))
+      .filter((opt): opt is DropdownOption => opt != null)
     const selectedValues = getAllSignalFilterSelectedValues()
     const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS])
     dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = [
@@ -908,7 +925,7 @@ function applyFilterSelectResponseItem(resp: FilterSelectResponseItem) {
   applyAlarmTimeRange(resp.startAlarmTime, resp.endAlarmTime)
 
   if (isApiDropdownField(resp.field)) {
-    filterDropdownRawCache[resp.field] = (resp.dropDown ?? []) as Record<string, unknown>[]
+    filterDropdownRawCache[resp.field] = (resp.dropDown ?? []) as unknown as unknown as Record<string, unknown>[]
     const newOptions = (resp.dropDown ?? [])
       .map(item => toFilterDropdownOption(item, resp.field))
       .filter((opt): opt is DropdownOption => opt != null)
@@ -1056,7 +1073,7 @@ function buildStaticDropdownRaw(field: string): Record<string, unknown>[] {
 function enrichFilterDialogData(field: string): Record<string, unknown>[] {
   if (isApiDropdownField(field)) {
     return (filterDropdownRawCache[field] ?? []).map(row => {
-      const item = row as FilterSelectDropdownItem
+      const item = row as unknown as unknown as FilterSelectDropdownItem
       const mapped = toFilterDropdownOption(item, field)
       return mapped
         ? { ...row, value: mapped.value, label: mapped.label }
@@ -1463,12 +1480,19 @@ function buildPivotConfig(): PivotConfig {
       alias: v.alias,
       show_as: v.show_as,
     })),
+    top_n: stateData.topN ? { ...stateData.topN } : undefined,
+    row_filters: stateData.rowFilters.map(item => ({ ...item })),
+    col_filters: stateData.colFilters.map(item => ({ ...item })),
     order_by: stateData.sortField.map(field => ({ field, direction: stateData.sortDir as 'asc' | 'desc' })),
+    pagination: stateData.pagination ? { ...stateData.pagination } : undefined,
     limit: stateData.limitVal,
     having: stateData.having.map(h => ({ field: h.field, op: h.op, value: h.value })),
+    calculated_fields: stateData.calculatedFields.map(item => ({ ...item })),
+    calculated_items: stateData.calculatedItems.map(item => ({ ...item })),
     chart_type: stateData.chartType,
-    grand_total: false,
-    subtotals: false,
+    grand_total: stateData.grandTotal,
+    subtotals: stateData.subtotals,
+    request_meta: stateData.requestMeta ? { ...stateData.requestMeta } : undefined,
   }
 }
 
@@ -1586,10 +1610,19 @@ function handleClear() {
   stateData.axes = []
   stateData.legend = []
   stateData.values = []
+  stateData.rowFilters = []
+  stateData.colFilters = []
   stateData.sortField = []
   stateData.sortDir = 'desc'
   stateData.limitVal = 1000
   stateData.having = []
+  stateData.pagination = undefined
+  stateData.grandTotal = false
+  stateData.subtotals = false
+  stateData.topN = undefined
+  stateData.calculatedFields = []
+  stateData.calculatedItems = []
+  stateData.requestMeta = undefined
   stateData.chartType = 'bar'
   resetShowAsMap()
   signalFields.value = []
@@ -1607,8 +1640,13 @@ function applyPivotConfig(config: PivotConfig) {
   const configAxes = config.axes ?? []
   const configLegend = config.legend ?? []
   const configValues = config.values ?? []
+  const configRowFilters = config.row_filters ?? []
+  const configColFilters = config.col_filters ?? []
   const configOrderBy = config.order_by ?? []
+  const configPagination = config.pagination
   const configHaving = config.having ?? []
+  const configCalculatedFields = config.calculated_fields ?? []
+  const configCalculatedItems = config.calculated_items ?? []
 
   stateData.filters = configFilters.map((filter, index) =>
     normalizeFilterForUI(
@@ -1640,10 +1678,19 @@ function applyPivotConfig(config: PivotConfig) {
   }))
   syncShowAsMapFromValues()
 
+  stateData.rowFilters = configRowFilters.map(item => ({ ...item }))
+  stateData.colFilters = configColFilters.map(item => ({ ...item }))
   stateData.sortField = configOrderBy.map(item => item.field)
   stateData.sortDir = configOrderBy[0]?.direction ?? 'desc'
+  stateData.pagination = configPagination ? { ...configPagination } : undefined
   stateData.limitVal = config.limit ?? 1000
   stateData.having = configHaving.map(item => ({ ...item }))
+  stateData.grandTotal = config.grand_total ?? false
+  stateData.subtotals = config.subtotals ?? false
+  stateData.topN = config.top_n ? { ...config.top_n } : undefined
+  stateData.calculatedFields = configCalculatedFields.map(item => ({ ...item }))
+  stateData.calculatedItems = configCalculatedItems.map(item => ({ ...item }))
+  stateData.requestMeta = config.request_meta ? { ...config.request_meta } : undefined
   stateData.chartType = config.chart_type ?? 'bar'
 }
 
@@ -1704,7 +1751,7 @@ onMounted(async () => {
   try {
     const resp = await fetch('/api/fields')
     if (resp.ok) {
-      stateData.groups = await resp.json()
+      stateData.groups = injectExtraImportFields(await resp.json())
       stateData.filters = stateData.filters.map((f, i) => ensureFilterMeta(ensureFilterAlias(f), i + 1))
     }
   } catch (e) {

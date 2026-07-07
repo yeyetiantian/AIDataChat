@@ -155,7 +155,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 **默认：每个请求只生成一个图表。** 即使请求包含多个维度，也聚合到一个图表中。
 
-**多图表例外**：只有用户明确说"分别展示"、"生成多个图表"、"同时看多个维度"这类明确表示要多个图表时，才使用多个图表。
+**多图表例外**：只有用户明确说"分别展示"、"生成多个图表"这类明确表示要多个图表时，才使用多个图表。
 
 所有图表配置统一使用 charts 数组，即使只生成一个图表也放在 charts 中。
 每个图表包含 title、pivot_config、chart_type。
@@ -171,6 +171,10 @@ suggestions 字段必须为空列表（无需生成追问）。
   {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }}
 ]}}
 
+**chart_type 规则**：
+- 如果用户明确指定了图表类型（如"生成雷达图""改成饼图"），必须使用用户指定的类型，不要擅自更改
+- 如果用户未指定图表类型，根据数据特征自动匹配合适的图表（见下方选择规则）
+
 ### 图表字段说明
 
 **axes**（行维度，必填，至少 1 个）
@@ -179,7 +183,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 - aggregation: source / day / month / year（仅时间字段可用，按天/月/年聚合）
 - 示例：{{"field": "vehicle_type", "alias": "车型"}}、{{"field": "alarm_time", "aggregation": "month", "alias": "报警时间"}}
 
-**legend**（列维度/图例，可选）
+**legend**（列维度/图例，【图例默认不指定，除非用户明确指定某种图例】）
 - field: 字段名（必填）
 - alias: 显示别名（必填）
 - 用于多系列对比（如按 rule_type 拆分为多条线）
@@ -196,32 +200,31 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 **filters**（筛选条件，可选）
 - field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
-- op: lt / gt / gte / lte / date_range / between / in
-- value: 数组，如 ["VIN1", "VIN2"] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]
+- value: 必须是数组，如 ["VIN1", "VIN2"] / [4523] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]；数值不要加引号
+- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】 (如果value是非时间的数组，op必须是 in)
 - filter_type：筛选器类型（可选）
-- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}
+- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}/{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}/{{"field": "task", "op": "in", "value": [4523], "filter_type": ""}}
 
 **having**（聚合后过滤，可选）
 - field: 聚合字段名
-- op: gt / lt / gte / lte / eq
+- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】
 - value: 单个值（非数组）
 - 示例：{{"field": "vehicle_type", "op": "gt", "value": 10}}
 
 **order_by**（排序，可选）
 - field: 字段名（必填，如 "alarm_time"、"vehicle_type"）
-- dir: asc / desc
+- dir: 只能在这里面选择【asc / desc】
 - 示例：{{"field": "alarm_time", "dir": "desc"}}
 
 **limit**（最大返回条数，可选）
-- 整数，默认 100，最大 10000
-- 示例：100
+- 整数，默认 1000，最大 10000
+- 示例：1000
 
 **chart_type**（图表类型）
 - 可选值：bar / line / area / point / pie / radar
-- 选择规则：类别对比 → bar（柱状图），时间趋势 → line（折线图），占比分布 → pie（饼图），数据点分布 → point（散点图），多维指标对比 → radar（雷达图）
+- 选择规则：类别对比 → bar（柱状图），时间趋势 → line（折线图），面积趋势 → area（面积图），占比分布 → pie（饼图），数据点分布 → point（散点图），多维指标对比 → radar（雷达图）
 
 ### 约束汇总
-- 每个 pivot_config 中的 values 必须有 id 字段（按 val_1、val_2 递增），缺少 id 会导致校验不通过
 - axes 至少 1 个，values 至少 1 个
 - 所有字段名（field）必须来自上面的数据字段列表，不能编造不存在的字段，如果你遇到不确定或不认识的字段名，一律归类为动态信号列，使用其原始列名即可。
 - 对动态信号列（不在固定字段中的列名）做 sum/avg/min/max 聚合时，系统自动转换数值类型，直接使用列名即可"""
@@ -295,26 +298,6 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
 
 
 # ---- 数据标准化 ----
-
-def _normalize_pivot(raw: Any) -> dict | None:
-    """确保 pivot_config 的 values 每条都有 id，且 list 字段不会被 LLM 误输出为 dict"""
-    if not isinstance(raw, dict):
-        return None
-    # 确保 list 字段是列表（LLM 可能输出单个 dict）
-    for key in ("legend", "axes", "filters", "values", "row_filters", "col_filters", "calculated_fields", "calculated_items", "order_by"):
-        val = raw.get(key)
-        if isinstance(val, dict):
-            raw[key] = [val]
-        elif val is None:
-            raw[key] = []
-    # 给 values 补充 id
-    values = raw.get("values", [])
-    if isinstance(values, list):
-        for i, v in enumerate(values):
-            if isinstance(v, dict) and not v.get("id"):
-                v["id"] = f"val_{i + 1}"
-    return raw
-
 
 def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]:
     """将 AgentOutput 统一标准化为 state.charts 列表
@@ -786,7 +769,7 @@ def get_agent() -> Any:
     return _agent
 
 
-async def process_chat(message: str) -> dict[str, Any]:
+async def process_chat(message: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """处理聊天请求"""
     import uuid
     start = time.time()
@@ -813,7 +796,7 @@ async def process_chat(message: str) -> dict[str, Any]:
 
     state: AgentState = {
         "user_message": message,
-        "conversation_history": [],
+        "conversation_history": history or [],
         "intent": None,
         "charts": [],
         "suggestions": [],
