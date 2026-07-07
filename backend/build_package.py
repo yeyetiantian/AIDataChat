@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """AIDataChat 跨平台打包脚本
 
-将后端 FastAPI + 前端 Vue 打包为单个可执行目录。
+将后端 FastAPI 打包为单个可执行目录。
 用法:  python build_package.py
 
 依赖: pip install pyinstaller
+前端需单独构建后放置于打包产物同级的 dist/ 目录下。
 """
 
 from __future__ import annotations
@@ -18,11 +19,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = PROJECT_ROOT / "backend"
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
 BUILD_DIR = BACKEND_DIR / "build_temp"
 SPEC_DIR = BACKEND_DIR
 OUTPUT_DIR = BACKEND_DIR / "package_output"
-FRONTEND_DIST = FRONTEND_DIR / "dist"
 
 # 需要显式收集的包（含二进制扩展或动态导入）
 COLLECT_ALL = [
@@ -86,26 +85,6 @@ HIDDEN_IMPORTS = [
 ]
 
 
-def build_frontend() -> None:
-    """构建前端并复制到 backend/dist"""
-    print("[build] >>> 构建前端...")
-    _npm = ["npm", "install", "--no-audit", "--no-fund"]
-    subprocess.run(_npm, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
-    _build = ["npm", "run", "build"]
-    subprocess.run(_build, cwd=FRONTEND_DIR, check=True, shell=sys.platform == "win32")
-
-    if not FRONTEND_DIST.is_dir():
-        print("[build] 错误: 前端构建失败，未生成 dist 目录")
-        sys.exit(1)
-
-    # 复制到 backend/dist（适配 PyInstaller --add-data 相对路径）
-    target = BACKEND_DIR / "dist"
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(FRONTEND_DIST, target)
-    print(f"[build] 前端构建完成: {target} ({sum(f.stat().st_size for f in target.rglob('*')) / 1024:.0f} KB)")
-
-
 def _ensure_data_dir() -> None:
     """确保 data/ 目录存在，创建默认数据文件（data/ 在 .gitignore 中）"""
     data_dir = BACKEND_DIR / "data"
@@ -161,10 +140,6 @@ def run_pyinstaller() -> None:
     cmd.append("--add-data")
     cmd.append(f"data{os.pathsep}data")
 
-    # --add-data: 前端 dist
-    cmd.append("--add-data")
-    cmd.append(f"dist{os.pathsep}dist")
-
     cmd.append(str(BACKEND_DIR / "run.py"))
 
     print(f"[build] PyInstaller 命令: {' '.join(cmd)}")
@@ -177,9 +152,8 @@ def run_pyinstaller() -> None:
         print("\n".join(lines[-30:]))
         result.check_returncode()
 
-    # 将 data/ 和 dist/ 复制到可执行文件同级（不在 _internal 内）
+    # 将 data/ 复制到可执行文件同级（不在 _internal 内）
     _copy_to_output("data")
-    _copy_to_output("dist")
 
     print(f"[build] PyInstaller 打包完成")
 
@@ -258,7 +232,6 @@ def main() -> None:
     print("=" * 50)
 
     try:
-        build_frontend()
         run_pyinstaller()
         archive = create_archive()
         print(f"\n[build] ✅ 打包成功: {archive}")
