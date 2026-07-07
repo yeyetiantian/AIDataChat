@@ -176,79 +176,18 @@
                     <el-input v-model="item.value[1]" size="small" class="filter-text-input-sm" placeholder="结束" @blur="() => onFilterFieldChange(item)" />
                   </div>
                 </template>
-                <template v-else-if="item.field === 'vehicle'">
-                  <el-select
-                    v-if="!isVehicleLargeList()"
-                    :model-value="item.value"
-                    multiple
-                    collapse-tags
-                    collapse-tags-tooltip
-                    filterable
-                    size="small"
-                    class="filter-value-select"
-                    placeholder="选择值"
-                    :loading="!!apiFilterSearchLoading.vehicle"
-                    @update:model-value="(val: string[]) => onApiFilterMultiChange(item, val)"
-                  >
-                    <el-option
-                      v-for="opt in getFilterOptions('vehicle')"
-                      :key="opt.value === '' ? '__all__' : opt.value"
-                      :label="opt.label"
-                      :value="opt.value"
-                    />
-                  </el-select>
-                  <el-input
-                    v-else
-                    readonly
-                    size="small"
-                    class="filter-value-select vehicle-picker-input"
-                    :placeholder="getVehiclePickerPlaceholder(item)"
-                    :model-value="getVehiclePickerText(item)"
-                    @click="openVehicleDialog(item)"
-                  >
-                    <template #suffix>
-                      <el-icon><ArrowDown /></el-icon>
-                    </template>
-                  </el-input>
-                </template>
-                <template v-else-if="isApiDropdownField(item.field)">
-                  <el-select
-                    :model-value="item.value"
-                    multiple
-                    collapse-tags
-                    collapse-tags-tooltip
-                    filterable
-                    remote
-                    reserve-keyword
-                    size="small"
-                    class="filter-value-select"
-                    placeholder="选择值"
-                    :loading="!!apiFilterSearchLoading[item.field]"
-                    :remote-method="(query: string) => onApiFilterRemoteSearch(item.field, query)"
-                    @update:model-value="(val: string[]) => onApiFilterMultiChange(item, val)"
-                  >
-                    <el-option
-                      v-for="opt in getFilterOptions(item.field)"
-                      :key="opt.value === '' ? '__all__' : opt.value"
-                      :label="opt.label"
-                      :value="opt.value"
-                    />
-                  </el-select>
-                </template>
                 <template v-else-if="item.isSignal">
                   <el-select
+                    v-if="!isSignalFilterDropdownLargeList()"
                     :model-value="item.value"
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
                     filterable
-                    remote
-                    reserve-keyword
                     size="small"
                     class="filter-value-select"
                     placeholder="选择值"
                     :loading="!!apiFilterSearchLoading[SIGNAL_FILTER_DROPDOWN_FOCUS]"
-                    :remote-method="onSignalFilterRemoteSearch"
                     @update:model-value="(val: string[]) => onSignalFilterMultiChange(item, val)"
                   >
                     <el-option
@@ -258,18 +197,38 @@
                       :value="opt.value"
                     />
                   </el-select>
+                  <el-input
+                    v-else
+                    readonly
+                    size="small"
+                    class="filter-value-select filter-picker-input"
+                    :placeholder="getFilterPickerPlaceholder(item)"
+                    :model-value="getSignalFilterPickerText(item)"
+                    @click="openSignalFilterSelectDialog(item)"
+                  >
+                    <template #suffix>
+                      <el-icon><ArrowDown /></el-icon>
+                    </template>
+                  </el-input>
                 </template>
-                <template v-else>
+                <template v-else-if="isMultiSelectDropdownFilter(item.field)">
                   <el-select
+                    v-if="!isFilterDropdownLargeList(item.field)"
                     :model-value="item.value"
                     multiple
                     collapse-tags
                     collapse-tags-tooltip
                     filterable
+                    :remote="isApiRemoteDropdownField(item.field)"
+                    :reserve-keyword="isApiRemoteDropdownField(item.field)"
                     size="small"
                     class="filter-value-select"
                     placeholder="选择值"
-                    @update:model-value="(val: string[]) => onFilterMultiChange(item, val)"
+                    :loading="!!apiFilterSearchLoading[item.field]"
+                    :remote-method="isApiRemoteDropdownField(item.field)
+                      ? (query: string) => onApiFilterRemoteSearch(item.field, query)
+                      : undefined"
+                    @update:model-value="(val: string[]) => onFilterDropdownChange(item, val)"
                   >
                     <el-option
                       v-for="opt in getFilterOptions(item.field)"
@@ -278,6 +237,19 @@
                       :value="opt.value"
                     />
                   </el-select>
+                  <el-input
+                    v-else
+                    readonly
+                    size="small"
+                    class="filter-value-select filter-picker-input"
+                    :placeholder="getFilterPickerPlaceholder(item)"
+                    :model-value="getFilterPickerText(item)"
+                    @click="openFilterSelectDialog(item)"
+                  >
+                    <template #suffix>
+                      <el-icon><ArrowDown /></el-icon>
+                    </template>
+                  </el-input>
                 </template>
                 <el-button size="small" type="danger" :icon="Delete" circle @click="removeItem(i, 'filters')" />
                 <el-button
@@ -427,12 +399,7 @@
   </div>
 
   <ResultListDialog v-model="resultDialogVisible" />
-  <VehicleListDialog
-    v-model="vehicleDialogVisible"
-    :data="vehicleDropdownRaw"
-    :selected-values="vehicleDialogSelectedValues"
-    @confirm="onVehicleDialogConfirm"
-  />
+  <FilterSelectDialog ref="filterSelectDialogRef" />
 </template>
 
 <script setup lang="ts">
@@ -458,8 +425,11 @@ import {
   SIGNAL_TRIGGER_FILTER_FIELDS,
   SIGNAL_DROPDOWN_TRIGGER_FIELDS,
   SIGNAL_FILTER_DROPDOWN_FOCUS,
-  VEHICLE_DROPDOWN_DIALOG_THRESHOLD,
 } from '@/constants/filterDropdown'
+import {
+  FILTER_DROPDOWN_DIALOG_THRESHOLD,
+  FILTER_SELECT_DIALOG_CONFIG,
+} from '@/constants/filterSelectDialog'
 import {
   fetchFilterSelectOptions,
   toSelectApiOp,
@@ -473,7 +443,7 @@ import {
 } from '@/api/filterSelect'
 import { RESULT_VIEW_FIELDS } from '@/constants/resultList'
 import ResultListDialog from '@/components/ResultListDialog.vue'
-import VehicleListDialog from '@/components/VehicleListDialog.vue'
+import FilterSelectDialog from '@/components/FilterSelectDialog.vue'
 
 interface DropdownOption {
   label: string
@@ -481,19 +451,13 @@ interface DropdownOption {
 }
 
 const dropdownCache = reactive<Record<string, DropdownOption[]>>({})
+const filterDropdownRawCache = reactive<Record<string, Record<string, unknown>[]>>({})
 const apiFilterSearchLoading = reactive<Record<string, boolean>>({})
 const apiFilterKeywords = reactive<Record<string, string>>({})
 const alarmTimeRange = reactive({ start: '', end: '' })
 const signalFields = ref<FieldDef[]>([])
-const vehicleDropdownRaw = ref<FilterSelectDropdownItem[]>([])
 const resultDialogVisible = ref(false)
-const vehicleDialogVisible = ref(false)
-const vehicleDialogFilterItem = ref<FilterItem | null>(null)
-const vehicleDialogSelectedValues = computed(() => {
-  const item = vehicleDialogFilterItem.value
-  if (!item || !Array.isArray(item.value)) return []
-  return item.value.filter(v => v !== '' && v != null).map(String)
-})
+const filterSelectDialogRef = ref<InstanceType<typeof FilterSelectDialog> | null>(null)
 let filterSelectRequestId = 0
 let signalListRequestId = 0
 let signalFilterDropdownRequestId = 0
@@ -593,7 +557,7 @@ function isSignalDropdownTriggerField(field: string): boolean {
 }
 
 function canLoadSignalFilterDropdown(): boolean {
-  return stateData.filters.some(f => isSignalDropdownTriggerField(f.field))
+  return stateData.filters.some(f => isSignalDropdownTriggerField(f.field) || f.isSignal)
 }
 
 function getAllSignalFilterSelectedValues(): string[] {
@@ -609,6 +573,62 @@ function getAllSignalFilterSelectedValues(): string[] {
 
 function getSignalFilterOptions(): DropdownOption[] {
   return dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? [{ label: '全部', value: '' }]
+}
+
+function isSignalFilterDropdownLargeList(): boolean {
+  return (dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? []).filter(o => o.value !== '').length
+    > FILTER_DROPDOWN_DIALOG_THRESHOLD
+}
+
+function getSignalFilterPickerText(item: FilterItem): string {
+  const raw = Array.isArray(item.value) ? item.value : ['']
+  const values = raw.filter(v => v !== '' && v != null).map(String)
+  if (values.length === 0) return '全部'
+  const opts = dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? []
+  return values.map(v => opts.find(o => o.value === v)?.label ?? v).join(', ')
+}
+
+function enrichSignalFilterDialogData(): Record<string, unknown>[] {
+  const raw = filterDropdownRawCache[SIGNAL_FILTER_DROPDOWN_FOCUS]
+  if (raw?.length) {
+    return raw.map(row => {
+      const name = String(row.name ?? row.value ?? row.label ?? '')
+      return { name, value: name, label: name }
+    })
+  }
+  return (dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] ?? [])
+    .filter(o => o.value !== '')
+    .map(o => ({ name: o.label, value: o.value, label: o.label }))
+}
+
+function getSelectedSignalFilterValues(item: FilterItem): string[] {
+  if (!Array.isArray(item.value)) return []
+  return item.value.filter(v => v !== '' && v != null).map(String)
+}
+
+async function openSignalFilterSelectDialog(item: FilterItem) {
+  const focus = SIGNAL_FILTER_DROPDOWN_FOCUS
+  const config = FILTER_SELECT_DIALOG_CONFIG[focus] ?? {}
+  const valueKey = config.valueKey ?? 'value'
+  const labelKey = config.labelKey ?? 'label'
+  const columns = config.head ?? [{ field: 'name', label: '信号列表' }]
+  const data = enrichSignalFilterDialogData()
+
+  try {
+    const selected = await filterSelectDialogRef.value?.open({
+      title: config.title ?? '信号选择',
+      data,
+      columns,
+      valueKey,
+      labelKey,
+      selectedValues: getSelectedSignalFilterValues(item),
+    })
+    if (selected == null) return
+    syncDropdownCacheForSelection(focus, selected)
+    onSignalFilterMultiChange(item, selected.length > 0 ? selected : [''])
+  } catch {
+    // 用户取消，保持当前值（未选时为全部）
+  }
 }
 
 async function refreshSignalFilterDropdown(keyword?: string) {
@@ -640,7 +660,14 @@ async function refreshSignalFilterDropdown(keyword?: string) {
       ? resp.find(r => r.field === SIGNAL_FILTER_DROPDOWN_FOCUS) ?? resp[0]
       : resp
 
-    const newOptions = (item?.dropDown ?? []).map(toFilterDropdownOption)
+    const dropDown = item?.dropDown ?? []
+    filterDropdownRawCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = dropDown.map(row => {
+      const name = String((row as FilterSelectDropdownItem).name ?? '')
+      return { name, value: name, label: name }
+    })
+    const newOptions = dropDown
+      .map(row => toFilterDropdownOption(row as FilterSelectDropdownItem))
+      .filter(opt => opt.value !== '')
     const selectedValues = getAllSignalFilterSelectedValues()
     const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS])
     dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS] = [
@@ -763,8 +790,16 @@ function isApiDropdownField(field: string): boolean {
   return (API_DROPDOWN_FILTER_FIELDS as readonly string[]).includes(field)
 }
 
+function isMultiSelectDropdownFilter(field: string): boolean {
+  return isApiDropdownField(field) || isStaticDropdownField(field)
+}
+
+function isApiRemoteDropdownField(field: string): boolean {
+  return isApiDropdownField(field) && field !== 'vehicle' && !isFilterDropdownLargeList(field)
+}
+
 function isStaticDropdownField(field: string): boolean {
-  return !isTimeFilterField(field) && !isNumericFilterField(field) && !isStringFilterField(field) && !isApiDropdownField(field)
+  return field in STATIC_DROPDOWN_DATA
 }
 
 function isResultViewField(field: string): boolean {
@@ -861,10 +896,10 @@ function applyFilterSelectResponseItem(resp: FilterSelectResponseItem) {
   applyAlarmTimeRange(resp.startAlarmTime, resp.endAlarmTime)
 
   if (isApiDropdownField(resp.field)) {
-    if (resp.field === 'vehicle') {
-      vehicleDropdownRaw.value = resp.dropDown ?? []
-    }
-    const newOptions = (resp.dropDown ?? []).map(item => toFilterDropdownOption(item, resp.field))
+    filterDropdownRawCache[resp.field] = (resp.dropDown ?? []) as Record<string, unknown>[]
+    const newOptions = (resp.dropDown ?? [])
+      .map(item => toFilterDropdownOption(item, resp.field))
+      .filter((opt): opt is DropdownOption => opt != null)
     const selectedValues = getSelectedFilterValues(resp.field)
     const merged = mergeSelectedIntoOptions(newOptions, selectedValues, dropdownCache[resp.field])
     dropdownCache[resp.field] = [
@@ -946,7 +981,7 @@ function refreshLinkedFilterSelectOptions(excludeField?: string) {
 }
 
 function onApiFilterRemoteSearch(field: string, query: string) {
-  if (!isApiDropdownField(field) || field === 'vehicle') return
+  if (!isApiDropdownField(field) || isFilterDropdownLargeList(field)) return
   apiFilterKeywords[field] = query
   if (apiFilterSearchTimers[field]) {
     clearTimeout(apiFilterSearchTimers[field])
@@ -972,37 +1007,94 @@ function getFilterOptions(field: string): DropdownOption[] {
   return dropdownCache[field] ?? [{ label: '全部', value: '' }]
 }
 
-function getVehicleOptionCount(): number {
-  return (dropdownCache.vehicle ?? []).filter(o => o.value !== '').length
+function isFilterDropdownLargeList(field: string): boolean {
+  return (dropdownCache[field] ?? []).filter(o => o.value !== '').length > FILTER_DROPDOWN_DIALOG_THRESHOLD
 }
 
-function isVehicleLargeList(): boolean {
-  return getVehicleOptionCount() > VEHICLE_DROPDOWN_DIALOG_THRESHOLD
+function getFilterPickerPlaceholder(_item: FilterItem): string {
+  return ''
 }
 
-function getVehiclePickerPlaceholder(item: FilterItem): string {
-  const values = Array.isArray(item.value) ? item.value.filter(v => v !== '') : []
-  return values.length > 0 ? '' : '选择值'
+function getFilterPickerText(item: FilterItem): string {
+  const raw = Array.isArray(item.value) ? item.value : ['']
+  const values = raw.filter(v => v !== '' && v != null).map(String)
+  if (values.length === 0) return '全部'
+  const opts = dropdownCache[item.field] ?? []
+  return values.map(v => opts.find(o => o.value === v)?.label ?? v).join(', ')
 }
 
-function getVehiclePickerText(item: FilterItem): string {
-  const values = Array.isArray(item.value) ? item.value.filter(v => v !== '') : []
-  if (values.length === 0) return ''
-  const opts = dropdownCache.vehicle ?? []
-  const labels = values.map(v => opts.find(o => o.value === String(v))?.label ?? String(v))
-  return labels.join(', ')
+function buildStaticDropdownRaw(field: string): Record<string, unknown>[] {
+  const labels = STATIC_DROPDOWN_DATA[field] ?? []
+  return labels.map((label, i) => ({ label, value: String(i) }))
 }
 
-function openVehicleDialog(item: FilterItem) {
-  vehicleDialogFilterItem.value = item
-  vehicleDialogVisible.value = true
+function enrichFilterDialogData(field: string): Record<string, unknown>[] {
+  if (isApiDropdownField(field)) {
+    return (filterDropdownRawCache[field] ?? []).map(row => {
+      const item = row as FilterSelectDropdownItem
+      const mapped = toFilterDropdownOption(item, field)
+      return mapped
+        ? { ...row, value: mapped.value, label: mapped.label }
+        : row
+    })
+  }
+  if (filterDropdownRawCache[field]?.length) {
+    return filterDropdownRawCache[field]
+  }
+  return (dropdownCache[field] ?? [])
+    .filter(o => o.value !== '')
+    .map(o => ({ label: o.label, value: o.value }))
 }
 
-function onVehicleDialogConfirm(selectedIds: string[]) {
-  const item = vehicleDialogFilterItem.value
-  if (!item) return
-  onApiFilterMultiChange(item, selectedIds.length > 0 ? selectedIds : [''])
-  vehicleDialogFilterItem.value = null
+function syncDropdownCacheForSelection(field: string, selectedIds: string[]) {
+  const dialogData = enrichFilterDialogData(field)
+  const map = new Map(
+    (dropdownCache[field] ?? []).filter(o => o.value !== '').map(o => [o.value, o]),
+  )
+
+  selectedIds.forEach(id => {
+    if (!id || map.has(id)) return
+    const raw = dialogData.find(r => String(r.value ?? '') === id)
+    if (raw) {
+      map.set(id, { label: String(raw.label ?? id), value: id })
+    }
+  })
+
+  dropdownCache[field] = [{ label: '全部', value: '' }, ...map.values()]
+}
+
+async function openFilterSelectDialog(item: FilterItem) {
+  const field = item.field
+  const fieldLabel = item.alias || getFieldAliasCn(field)
+  const config = FILTER_SELECT_DIALOG_CONFIG[field] ?? {}
+  const valueKey = config.valueKey ?? 'value'
+  const labelKey = config.labelKey ?? 'label'
+  const columns = config.head ?? [{ field: labelKey, label: fieldLabel }]
+  const data = enrichFilterDialogData(field)
+
+  try {
+    const selected = await filterSelectDialogRef.value?.open({
+      title: config.title ?? `${fieldLabel}列表`,
+      data,
+      columns,
+      valueKey,
+      labelKey,
+      selectedValues: getSelectedFilterValues(field),
+    })
+    if (selected == null) return
+    syncDropdownCacheForSelection(field, selected)
+    onFilterDropdownChange(item, selected.length > 0 ? selected : [''])
+  } catch {
+    // 用户取消，保持当前值（未选时为全部）
+  }
+}
+
+function onFilterDropdownChange(item: FilterItem, val: string[]) {
+  if (isApiDropdownField(item.field)) {
+    onApiFilterMultiChange(item, val)
+  } else {
+    onFilterMultiChange(item, val)
+  }
 }
 
 async function loadFilterDropdown(field: string) {
@@ -1012,10 +1104,11 @@ async function loadFilterDropdown(field: string) {
   }
   if (dropdownCache[field]) return
 
-  const labels = STATIC_DROPDOWN_DATA[field] ?? []
+  const raw = buildStaticDropdownRaw(field)
+  filterDropdownRawCache[field] = raw
   dropdownCache[field] = [
     { label: '全部', value: '' },
-    ...labels.map((label, i) => ({ label, value: String(i) })),
+    ...raw.map(item => ({ label: String(item.label), value: String(item.value) })),
   ]
 }
 
@@ -1261,7 +1354,9 @@ function onDrop(event: DragEvent, zone: ZoneType) {
     }
     stateData.filters.push(newFilter)
     syncFilterSelectOrders()
-    if (isStaticDropdownField(field.name)) {
+    if (isSignal) {
+      refreshSignalFilterDropdown()
+    } else if (isStaticDropdownField(field.name)) {
       loadFilterDropdown(field.name)
     } else if (isApiFilterField(field.name)) {
       refreshFilterSelectOptions(field.name)
@@ -1437,10 +1532,9 @@ function handleClear() {
   stateData.having = []
   stateData.chartType = 'bar'
   signalFields.value = []
-  vehicleDropdownRaw.value = []
   Object.keys(apiFilterKeywords).forEach(key => delete apiFilterKeywords[key])
+  Object.keys(filterDropdownRawCache).forEach(key => delete filterDropdownRawCache[key])
   delete dropdownCache[SIGNAL_FILTER_DROPDOWN_FOCUS]
-  delete dropdownCache.vehicle
   latestRecommendedTop.value = null
   latestRecommendKey.value = ''
 }
@@ -1459,7 +1553,7 @@ defineExpose({
       if (config.filters.some(f => isSignalTriggerField(f.field))) {
         refreshSignalList()
       }
-      if (canLoadSignalFilterDropdown()) {
+      if (config.filters.some(f => f.isSignal) || canLoadSignalFilterDropdown()) {
         refreshSignalFilterDropdown()
       }
     }
@@ -1790,6 +1884,14 @@ onBeforeUnmount(() => {
 }
 
 .vehicle-picker-input :deep(.el-input__inner) {
+  cursor: pointer;
+}
+
+.filter-picker-input {
+  cursor: pointer;
+}
+
+.filter-picker-input :deep(.el-input__inner) {
   cursor: pointer;
 }
 

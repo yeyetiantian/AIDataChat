@@ -22,9 +22,6 @@ export const SIGNAL_DROPDOWN_TRIGGER_FIELDS = ['task', 'rule_name', 'vehicle'] a
 /** 信号筛选器下拉联动 focusField */
 export const SIGNAL_FILTER_DROPDOWN_FOCUS = 'signal2'
 
-/** 车辆下拉超过该条数时使用弹窗选择 */
-export const VEHICLE_DROPDOWN_DIALOG_THRESHOLD = 5
-
 /** 筛选器下拉静态数据 */
 export const STATIC_DROPDOWN_DATA: Record<string, string[]> = {
   person: ['张三', '李四', '王五'],
