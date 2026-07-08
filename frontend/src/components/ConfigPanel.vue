@@ -331,6 +331,7 @@
               <div v-for="(item, i) in values" :key="i" class="zone-item">
                 <span class="zone-item-field">{{ item.alias || item.field }}</span>
                 <el-select v-model="item.aggregation" size="small" style="width:65px">
+                  <el-option label="原始值" value="source" />
                   <el-option label="计数" value="count" /><el-option label="求和" value="sum" />
                   <el-option label="平均" value="avg" /><el-option label="最大" value="max" /><el-option label="最小" value="min" />
                 </el-select>
