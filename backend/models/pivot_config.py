@@ -1,8 +1,3 @@
-"""Pivot 配置 Pydantic 模型（严格四属性 JSON）
-
-对应需求文档第 5 节的核心数据模型。
-"""
-
 from __future__ import annotations
 
 from typing import Any, Literal, Optional
