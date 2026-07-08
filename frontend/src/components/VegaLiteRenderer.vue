@@ -76,6 +76,13 @@ const isFullscreen = ref(false)
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let resizeObserver: ResizeObserver | null = null
 const DONUT_INNER_RADIUS = 100
+const DATA_ZOOM_BRUSH_PARAM = 'dataZoomBrush'
+const DEFAULT_VEGA_HEIGHT = 300
+const DATA_ZOOM_MIN_HEIGHT = 260
+const DATA_ZOOM_OVERVIEW_HEIGHT = 64
+const DATA_ZOOM_OVERVIEW_MIN_HEIGHT = 32
+const DATA_ZOOM_OVERVIEW_SHRINK_RATIO = 2 / 3
+const DATA_ZOOM_SPACING = 10
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -440,6 +447,236 @@ function applyDonutStyle(spec: Record<string, any>) {
   return spec
 }
 
+function isLineLikeMark(mark: unknown) {
+  if (typeof mark === 'string') return mark === 'line' || mark === 'area'
+  if (!mark || typeof mark !== 'object') return false
+  const type = (mark as Record<string, any>).type
+  return type === 'line' || type === 'area'
+}
+
+function hasLineLikeMark(spec: Record<string, any>) {
+  if (isLineLikeMark(spec.mark)) return true
+
+  if (Array.isArray(spec.layer)) {
+    return spec.layer.some((layer: Record<string, any>) => hasLineLikeMark(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    return hasLineLikeMark(spec.spec)
+  }
+
+  return false
+}
+
+function hasXEncoding(spec: Record<string, any>) {
+  if (spec.encoding?.x) return true
+
+  if (Array.isArray(spec.layer)) {
+    return spec.layer.some((layer: Record<string, any>) => hasXEncoding(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    return hasXEncoding(spec.spec)
+  }
+
+  return false
+}
+
+function isCompositeSpec(spec: Record<string, any>) {
+  return (
+    Array.isArray(spec.vconcat) ||
+    Array.isArray(spec.hconcat) ||
+    Array.isArray(spec.concat) ||
+    !!spec.facet ||
+    !!spec.repeat
+  )
+}
+
+function shouldApplyDataZoom(spec: Record<string, any>) {
+  if (isCompositeSpec(spec) || !hasXEncoding(spec)) return false
+
+  if (props.chartType) {
+    return props.chartType === 'line' || props.chartType === 'area'
+  }
+
+  return hasLineLikeMark(spec)
+}
+
+function applyXDomainFromBrush(spec: Record<string, any>) {
+  if (spec.encoding?.x) {
+    spec.encoding.x = {
+      ...spec.encoding.x,
+      scale: {
+        ...(spec.encoding.x.scale || {}),
+        domain: { param: DATA_ZOOM_BRUSH_PARAM },
+      },
+    }
+  }
+
+  if (Array.isArray(spec.layer)) {
+    spec.layer = spec.layer.map((layer: Record<string, any>) => applyXDomainFromBrush(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applyXDomainFromBrush(spec.spec)
+  }
+
+  return spec
+}
+
+function applyOverviewStyle(spec: Record<string, any>) {
+  delete spec.title
+
+  if (spec.encoding?.x) {
+    spec.encoding.x = {
+      ...spec.encoding.x,
+      axis: {
+        ...(spec.encoding.x.axis || {}),
+        grid: false,
+        ticks: false,
+        domain: false,
+        labels: false,
+        title: null,
+      },
+    }
+  }
+
+  if (spec.encoding?.y) {
+    spec.encoding.y = {
+      ...spec.encoding.y,
+      axis: null,
+    }
+  }
+
+  if (spec.encoding?.color) {
+    spec.encoding.color = {
+      ...spec.encoding.color,
+      legend: null,
+    }
+  }
+
+  if (spec.encoding?.size) {
+    delete spec.encoding.size
+  }
+
+  if (spec.mark) {
+    const mark = typeof spec.mark === 'string'
+      ? { type: spec.mark }
+      : { ...spec.mark }
+
+    mark.tooltip = false
+    mark.point = false
+    mark.clip = true
+
+    if (mark.type === 'line') {
+      mark.opacity = mark.opacity ?? 0.75
+      mark.strokeWidth = mark.strokeWidth ?? 1.4
+    }
+
+    if (mark.type === 'area') {
+      mark.opacity = mark.opacity ?? 0.35
+    }
+
+    spec.mark = mark
+  }
+
+  if (Array.isArray(spec.layer)) {
+    spec.layer = spec.layer.map((layer: Record<string, any>) => applyOverviewStyle(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applyOverviewStyle(spec.spec)
+  }
+
+  return spec
+}
+
+function resolveExplicitHeight(value?: number | string) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+
+  if (typeof value !== 'string') return null
+
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  const matched = trimmed.match(/^(\d+(?:\.\d+)?)px$/i) || trimmed.match(/^(\d+(?:\.\d+)?)$/)
+  if (!matched) return null
+
+  const parsed = Number(matched[1])
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function resolveBaseChartHeight() {
+  const explicitHeight = resolveExplicitHeight(props.height)
+  if (explicitHeight) return Math.max(explicitHeight, DATA_ZOOM_MIN_HEIGHT)
+
+  // Non-fullscreen charts use the renderer's default visual height.
+  // Reading the current rendered DOM height here causes a feedback loop
+  // once dataZoom rewrites the spec height.
+  if (!isFullscreen.value) {
+    return DEFAULT_VEGA_HEIGHT
+  }
+
+  const fullscreenHeight = vegaContainer.value?.clientHeight || chartContainer.value?.clientHeight || DEFAULT_VEGA_HEIGHT
+  return Math.max(fullscreenHeight, DATA_ZOOM_MIN_HEIGHT)
+}
+
+function resolveDataZoomHeights() {
+  const totalHeight = resolveBaseChartHeight()
+  const baseOverviewHeight = Math.min(DATA_ZOOM_OVERVIEW_HEIGHT, Math.max(48, Math.round(totalHeight * 0.22)))
+  const overviewHeight = Math.max(
+    DATA_ZOOM_OVERVIEW_MIN_HEIGHT,
+    Math.round(baseOverviewHeight * DATA_ZOOM_OVERVIEW_SHRINK_RATIO),
+  )
+  const mainHeight = Math.max(totalHeight - overviewHeight - DATA_ZOOM_SPACING, 180)
+
+  return {
+    mainHeight,
+    overviewHeight,
+  }
+}
+
+function applyDataZoom(spec: Record<string, any>) {
+  if (!shouldApplyDataZoom(spec)) return spec
+
+  const mainSpec = applyXDomainFromBrush(cloneSpec(spec) || spec)
+  const overviewSpec = applyOverviewStyle(cloneSpec(spec) || spec)
+  const { mainHeight, overviewHeight } = resolveDataZoomHeights()
+  const chartTitle = spec.title
+
+  delete mainSpec.title
+  delete overviewSpec.title
+
+  mainSpec.width = 'container'
+  mainSpec.height = mainHeight
+  overviewSpec.width = 'container'
+  overviewSpec.height = overviewHeight
+
+  if (Array.isArray(mainSpec.params)) {
+    mainSpec.params = mainSpec.params.filter((param: Record<string, any>) => param?.name !== DATA_ZOOM_BRUSH_PARAM)
+  }
+
+  const overviewParams = Array.isArray(overviewSpec.params)
+    ? overviewSpec.params.filter((param: Record<string, any>) => param?.name !== DATA_ZOOM_BRUSH_PARAM)
+    : []
+
+  overviewSpec.params = [
+    ...overviewParams,
+    {
+      name: DATA_ZOOM_BRUSH_PARAM,
+      select: { type: 'interval', encodings: ['x'] },
+    },
+  ]
+
+  return {
+    $schema: spec.$schema || 'https://vega.github.io/schema/vega-lite/v5.json',
+    ...(chartTitle ? { title: chartTitle } : {}),
+    width: 'container',
+    spacing: DATA_ZOOM_SPACING,
+    vconcat: [mainSpec, overviewSpec],
+  }
+}
+
 function collectDerivedFields(transforms: any[] = []) {
   const derivedFields = new Set<string>()
 
@@ -512,7 +749,10 @@ function buildRenderableSpec(): Record<string, any> | null {
     delete spec.title
   }
 
-  return applyDonutStyle(spec)
+  spec = applyDonutStyle(spec)
+  spec = applyDataZoom(spec)
+
+  return spec
 }
 
 function toggleFullscreen() {
