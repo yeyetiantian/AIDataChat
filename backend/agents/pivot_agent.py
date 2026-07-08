@@ -180,30 +180,29 @@ suggestions 字段必须为空列表（无需生成追问）。
 **axes**（行维度，必填，至少 1 个）
 - field: 字段名（必填）
 - alias: 显示别名（必填，默认显示字段名）
-- aggregation: source / day / month / year（仅时间字段可用，按天/月/年聚合）
+- aggregation: source / day / week / month / year（仅时间字段可用，按 原值/天/周/月/年聚合）
 - 示例：{{"field": "vehicle_type", "alias": "车型"}}、{{"field": "alarm_time", "aggregation": "month", "alias": "报警时间"}}
 
 **legend**（列维度/图例，【图例默认不指定，除非用户明确指定某种图例】）
 - field: 字段名（必填）
 - alias: 显示别名（必填）
-- 约束：字段的唯一值不宜过多（建议 ≤5），否则图表可读性差
 
 **values**（聚合值，必填，至少 1 个）
 - field: 字段名（必填），支持固定字段和动态信号
 - alias: 显示别名（必填，默认用字段名）
-- aggregation: source / count / sum / avg / min / max / count_distinct
-- 约束：count/source 可用于任意字段；/sum/avg/min/max 建议用于数值字段或动态信号列
+- aggregation: source / count / sum / avg / min / max
+- 约束：count/source 可用于任意字段；sum/avg/min/max 建议用于数值字段或动态信号列，默认使用count/source，用户有明确要求时再使用 sum/avg/min/max。
 
 **filters**（筛选条件，可选）
 - field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
-- value: 必须是数组，如 ["VIN1", "VIN2"] / [4523] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]；数值不要加引号
-- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】 (如果value是非时间的数组，op必须是 in)
+- value: 必须是数组，如 ["VIN1", "VIN2"] / [4523] / ["2026-06-20 00:00:00", "2026-07-01 00:00:00"]；数值不要加引号;
+- op: 只能在这里面选择【lt / gt / gte / lte / between / in】 (如果value是非时间的数组，op必须是 in，如果是时间范围，op必须使用 between)
 - filter_type：筛选器类型（可选）
-- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}/{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}/{{"field": "task", "op": "in", "value": [4523], "filter_type": ""}}
+- 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}/{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}
 
 **having**（聚合后过滤，可选）
 - field: 聚合字段名
-- op: 只能在这里面选择【lt / gt / gte / lte / date_range / between / in】
+- op: 只能在这里面选择【lt / gt / gte / lte / between / in】
 - value: 单个值（非数组）
 - 示例：{{"field": "vehicle_type", "op": "gt", "value": 10}}
 
@@ -296,7 +295,7 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
 # ---- 数据标准化 ----
 
 # 筛选器 op 合法值
-_FILTER_VALID_OPS = {"lt", "gt", "gte", "lte", "date_range", "between", "in"}
+_FILTER_VALID_OPS = {"lt", "gt", "gte", "lte", "between", "in"}
 
 # 固定字段名缓存（模块级，第一次调用时初始化）
 _fixed_field_names: set[str] | None = None
