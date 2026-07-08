@@ -75,6 +75,7 @@ const embedResult = ref<any>(null)
 const isFullscreen = ref(false)
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let resizeObserver: ResizeObserver | null = null
+const DONUT_INNER_RADIUS = 100
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -367,7 +368,12 @@ function buildVegaSpec(): Record<string, any> | null {
     width: 'container',
     height: props.height || 'container',
     data: { values: data },
-    mark: { type: chartType === 'pie' ? 'arc' : chartType, tooltip: true, point: chartType === 'line' },
+    mark: {
+      type: chartType === 'pie' ? 'arc' : chartType,
+      tooltip: true,
+      point: chartType === 'line',
+      ...(chartType === 'pie' ? { innerRadius: DONUT_INNER_RADIUS } : {}),
+    },
     encoding,
   }
 }
@@ -388,6 +394,46 @@ function hydrateSpecData(spec: Record<string, any>) {
     spec.data = {
       ...(spec.data || {}),
       values: props.data,
+    }
+  }
+
+  return spec
+}
+
+function isArcMark(mark: unknown) {
+  if (typeof mark === 'string') return mark === 'arc'
+  return !!mark && typeof mark === 'object' && (mark as Record<string, any>).type === 'arc'
+}
+
+function applyDonutStyle(spec: Record<string, any>) {
+  if (Array.isArray(spec.layer)) {
+    spec.layer = spec.layer.map((layer: Record<string, any>) => applyDonutStyle(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applyDonutStyle(spec.spec)
+  }
+
+  if (Array.isArray(spec.concat)) {
+    spec.concat = spec.concat.map((item: Record<string, any>) => applyDonutStyle(item))
+  }
+
+  if (Array.isArray(spec.hconcat)) {
+    spec.hconcat = spec.hconcat.map((item: Record<string, any>) => applyDonutStyle(item))
+  }
+
+  if (Array.isArray(spec.vconcat)) {
+    spec.vconcat = spec.vconcat.map((item: Record<string, any>) => applyDonutStyle(item))
+  }
+
+  if (isArcMark(spec.mark) || spec.encoding?.theta) {
+    const mark = typeof spec.mark === 'string'
+      ? { type: spec.mark }
+      : { ...(spec.mark || {}), type: spec.mark?.type || 'arc' }
+
+    spec.mark = {
+      ...mark,
+      innerRadius: DONUT_INNER_RADIUS,
     }
   }
 
@@ -466,7 +512,7 @@ function buildRenderableSpec(): Record<string, any> | null {
     delete spec.title
   }
 
-  return spec
+  return applyDonutStyle(spec)
 }
 
 function toggleFullscreen() {

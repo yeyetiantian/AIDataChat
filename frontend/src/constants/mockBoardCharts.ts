@@ -377,7 +377,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
   const charts: MockBoardChart[] = [
     {
       title: '规则报警数量占比',
-      description: '模拟数据: 规则名称维度的报警数量占比',
+      description: '',
       chartType: 'pie',
       pivotConfig: createBaseConfig({
         axes: [{ field: 'rule_name', alias: '规则名称' }],
@@ -395,7 +395,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
     },
     {
       title: '规则信号均值雷达',
-      description: '模拟数据: 各规则在多个信号维度上的均值对比',
+      description: '',
       chartType: 'radar',
       pivotConfig: createBaseConfig({
         axes: [{ field: 'rule_name', alias: '规则名称' }],
@@ -461,7 +461,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
     },
     {
       title: '按日规则报警数量',
-      description: '模拟数据: 按触发日期分规则的报警数量对比',
+      description: '',
       chartType: 'bar',
       pivotConfig: createBaseConfig({
         axes: [{ field: 'alarm_time', alias: '触发日期', aggregation: 'day' }],
@@ -547,7 +547,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
     },
     {
       title: '车速与电池SOC散点',
-      description: '模拟数据: VehSpdAvgDrvn_1 与 HVBSOC_BatSOC 的分布关系',
+      description: '',
       chartType: 'point',
       pivotConfig: createBaseConfig({
         values: [
@@ -609,7 +609,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
     },
     {
       title: '报警时序SOC变化',
-      description: '模拟数据: 按报警时间展示多个 SOC 与车辆指标变化趋势',
+      description: '',
       chartType: 'area',
       pivotConfig: createBaseConfig({
         axes: [{ field: 'alarm_time', alias: '报警时间', aggregation: 'hour' }],
@@ -716,7 +716,7 @@ export function createMockBoardCharts(): MockBoardChart[] {
     },
     {
       title: '报警时序扭矩变化',
-      description: '模拟数据: 按报警时间展示多个扭矩与温度指标变化趋势',
+      description: '',
       chartType: 'line',
       pivotConfig: createBaseConfig({
         axes: [{ field: 'alarm_time', alias: '报警时间' }],
