@@ -60,6 +60,10 @@
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Histogram } from '@element-plus/icons-vue'
 import embed from 'vega-embed'
+import {
+  Handler as VegaTooltipHandler,
+  formatValue as formatVegaTooltipValue,
+} from 'vega-tooltip'
 
 const props = defineProps<{
   spec?: Record<string, any> | null
@@ -92,6 +96,36 @@ const DATA_ZOOM_OVERVIEW_MIN_HEIGHT = 32
 const DATA_ZOOM_OVERVIEW_SHRINK_RATIO = 2 / 3
 const DATA_ZOOM_SPACING = 10
 const SIDE_LEGEND_LABEL_LIMIT = 140
+const PIE_TOTAL_FIELD = '__pie_total__'
+const PIE_PERCENT_FIELD = '__pie_percent__'
+const TOOLTIP_NUMBER_FORMATTER = new Intl.NumberFormat('zh-CN', {
+  maximumFractionDigits: 6,
+})
+const DEFAULT_VEGA_CATEGORY_COLORS = [
+  '#4c78a8',
+  '#f58518',
+  '#e45756',
+  '#72b7b2',
+  '#54a24b',
+  '#eeca3b',
+  '#b279a2',
+  '#ff9da6',
+  '#9d755d',
+  '#bab0ac',
+]
+const SHARED_TOOLTIP_CHART_TYPES = ['bar', 'line', 'area']
+
+type SharedStackedBarTooltipRow = {
+  label: string
+  value: string
+  color: string
+}
+
+type SharedStackedBarTooltipValue = {
+  __sharedStackedBar: true
+  title: string
+  rows: SharedStackedBarTooltipRow[]
+}
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -463,6 +497,495 @@ function applyDonutStyle(spec: Record<string, any>) {
       ...mark,
       innerRadius: DONUT_INNER_RADIUS,
     }
+  }
+
+  return spec
+}
+
+function toDatumFieldExpr(field: string) {
+  return `datum[${JSON.stringify(field)}]`
+}
+
+function normalizeTooltipEntries(tooltip: unknown) {
+  if (Array.isArray(tooltip)) return [...tooltip]
+  if (tooltip && typeof tooltip === 'object') return [tooltip]
+  return []
+}
+
+function hasTooltipField(entries: any[], field: string) {
+  return entries.some(entry => entry?.field === field)
+}
+
+function getSourceDataRows() {
+  if (Array.isArray(props.data) && props.data.length) {
+    return props.data
+  }
+
+  const specValues = props.spec?.data?.values
+  if (Array.isArray(specValues) && specValues.length) {
+    return specValues as Record<string, any>[]
+  }
+
+  return []
+}
+
+function normalizeCategoryValue(value: unknown) {
+  if (value == null) return ''
+
+  if (value instanceof Date) {
+    return `date:${value.getTime()}`
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+
+    if (/^\d{4}[-/]\d{2}[-/]\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/.test(trimmed)) {
+      const timestamp = Date.parse(trimmed.replace(/\//g, '-'))
+      if (Number.isFinite(timestamp)) {
+        return `date:${timestamp}`
+      }
+    }
+
+    return trimmed
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `num:${value}`
+  }
+
+  return String(value)
+}
+
+function formatTooltipTitle(value: unknown) {
+  if (value instanceof Date) {
+    return value.toLocaleString('zh-CN')
+  }
+
+  if (value == null || value === '') return '-'
+  return String(value)
+}
+
+function toFiniteNumber(value: unknown) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
+function formatTooltipMetricValue(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return TOOLTIP_NUMBER_FORMATTER.format(value)
+  }
+
+  const numeric = Number(value)
+  if (value !== '' && value != null && Number.isFinite(numeric)) {
+    return TOOLTIP_NUMBER_FORMATTER.format(numeric)
+  }
+
+  if (value == null || value === '') return '0'
+  return String(value)
+}
+
+function appendTooltipMetric(
+  tooltipValue: Record<string, any>,
+  label: string,
+  value: unknown,
+) {
+  const baseLabel = label || '值'
+  let nextLabel = baseLabel
+  let suffix = 2
+
+  while (Object.prototype.hasOwnProperty.call(tooltipValue, nextLabel)) {
+    nextLabel = `${baseLabel} (${suffix})`
+    suffix += 1
+  }
+
+  tooltipValue[nextLabel] = formatTooltipMetricValue(value)
+}
+
+function resolveTooltipColorPalette(spec: Record<string, any> | null | undefined) {
+  const barSpec = findPrimaryBarUnitSpec(spec)
+  const paletteCandidates = [
+    barSpec?.encoding?.color?.scale?.range,
+    spec?.encoding?.color?.scale?.range,
+    spec?.config?.range?.category,
+  ]
+
+  for (const candidate of paletteCandidates) {
+    if (Array.isArray(candidate) && candidate.length && candidate.every(color => typeof color === 'string')) {
+      return candidate as string[]
+    }
+  }
+
+  return DEFAULT_VEGA_CATEGORY_COLORS
+}
+
+function buildTooltipColorMap(
+  labels: string[],
+  spec: Record<string, any> | null | undefined,
+) {
+  const palette = resolveTooltipColorPalette(spec)
+  const colorMap = new Map<string, string>()
+
+  labels.forEach((label, index) => {
+    colorMap.set(label, palette[index % palette.length])
+  })
+
+  return colorMap
+}
+
+function isSharedStackedBarTooltipValue(value: unknown): value is SharedStackedBarTooltipValue {
+  return !!value
+    && typeof value === 'object'
+    && (value as SharedStackedBarTooltipValue).__sharedStackedBar === true
+    && Array.isArray((value as SharedStackedBarTooltipValue).rows)
+}
+
+function formatSharedStackedBarTooltipHtml(
+  value: SharedStackedBarTooltipValue,
+  sanitize: (value: unknown) => string,
+) {
+  const rowsHtml = value.rows.map((row) => {
+    const color = sanitize(row.color)
+    const label = sanitize(row.label)
+    const metricValue = sanitize(row.value)
+
+    return `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:4px;">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0;text-align:left;">
+          <span style="width:10px;height:10px;border-radius:999px;background:${color};flex-shrink:0;"></span>
+          <span style="color:#606266;">${label}</span>
+        </div>
+        <span style="color:#303133;font-weight:600;text-align:right;white-space:nowrap;">${metricValue}</span>
+      </div>
+    `
+  }).join('')
+
+  return `
+    <div style="min-width:220px;text-align:left;">
+      <div style="font-size:16px;font-weight:700;color:#303133;padding-bottom:6px;">${sanitize(value.title)}</div>
+      ${rowsHtml}
+    </div>
+  `
+}
+
+function buildSharedTooltipPayload(
+  tooltipValue: Record<string, any>,
+  spec: Record<string, any> | null | undefined,
+) {
+  const labels = Object.keys(tooltipValue).filter(key => key !== 'title')
+  if (!labels.length) return null
+
+  const colorMap = buildTooltipColorMap(labels, spec)
+
+  return {
+    __sharedStackedBar: true,
+    title: String(tooltipValue.title || ''),
+    rows: labels.map((label) => ({
+      label,
+      value: String(tooltipValue[label] ?? ''),
+      color: colorMap.get(label) || DEFAULT_VEGA_CATEGORY_COLORS[0],
+    })),
+  } satisfies SharedStackedBarTooltipValue
+}
+
+function findPrimaryBarUnitSpec(spec: Record<string, any> | null | undefined): Record<string, any> | null {
+  if (!spec || typeof spec !== 'object') return null
+
+  const markType = typeof spec.mark === 'string' ? spec.mark : spec.mark?.type
+  if (typeof markType === 'string' && SHARED_TOOLTIP_CHART_TYPES.includes(markType) && spec.encoding?.x && spec.encoding?.y) {
+    return spec
+  }
+
+  if (Array.isArray(spec.layer)) {
+    for (const layer of spec.layer) {
+      const matchedSpec = findPrimaryBarUnitSpec(layer)
+      if (matchedSpec) return matchedSpec
+    }
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    const matchedSpec = findPrimaryBarUnitSpec(spec.spec)
+    if (matchedSpec) return matchedSpec
+  }
+
+  for (const key of ['concat', 'hconcat', 'vconcat'] as const) {
+    if (!Array.isArray(spec[key])) continue
+
+    for (const child of spec[key]) {
+      const matchedSpec = findPrimaryBarUnitSpec(child)
+      if (matchedSpec) return matchedSpec
+    }
+  }
+
+  return null
+}
+
+function resolveHoveredCategoryValue(
+  datum: Record<string, any> | null | undefined,
+  xField: string,
+  fallbackKeys: string[] = [],
+) {
+  if (!datum) return null
+
+  if (datum[xField] != null) {
+    return datum[xField]
+  }
+
+  for (const key of fallbackKeys) {
+    if (key && datum[key] != null) {
+      return datum[key]
+    }
+  }
+
+  return null
+}
+
+function buildSharedStackedBarTooltipFromConfig(datum: Record<string, any> | null | undefined) {
+  const chartType = props.chartType || props.config?.chart_type || ''
+  if (!SHARED_TOOLTIP_CHART_TYPES.includes(chartType) || !props.config) return null
+
+  const sourceData = getSourceDataRows()
+  if (!sourceData.length) return null
+
+  const keys = Object.keys(sourceData[0] || {})
+  const axes = props.config.axes || []
+  const values = props.config.values || []
+  const legend = props.config.legend || []
+
+  if (!axes.length || (values.length <= 1 && !legend.length)) return null
+
+  const xField = resolveFieldName(keys, axes[0])
+  if (!xField) return null
+
+  const hoveredXValue = resolveHoveredCategoryValue(datum, xField, [
+    axes[0]?.alias || '',
+    axes[0]?.field || '',
+  ])
+  if (hoveredXValue == null) return null
+
+  const categoryKey = normalizeCategoryValue(hoveredXValue)
+  const matchingRows = sourceData.filter(row => normalizeCategoryValue(row?.[xField]) === categoryKey)
+  if (!matchingRows.length) return null
+
+  const tooltipValue: Record<string, any> = {
+    title: formatTooltipTitle(hoveredXValue),
+  }
+
+  if (values.length > 1) {
+    for (const value of values) {
+      const valueField = resolveFieldName(keys, value)
+      if (!valueField) continue
+
+      const totalValue = matchingRows.reduce((sum, row) => sum + toFiniteNumber(row?.[valueField]), 0)
+      appendTooltipMetric(tooltipValue, value.alias || valueField, totalValue)
+    }
+
+    return Object.keys(tooltipValue).length > 1 ? tooltipValue : null
+  }
+
+  if (!legend.length) return null
+
+  const legendField = resolveFieldName(keys, legend[0])
+  if (!legendField) return null
+
+  const axisKeys = new Set(axes.map((axis: any) => axis.alias || axis.field))
+  legend.forEach((legendItem: any) => axisKeys.add(legendItem.alias || legendItem.field))
+  const valueField = Object.keys(sourceData[0] || {}).find(key => !axisKeys.has(key))
+    || resolveFieldName(keys, values[0])
+
+  if (!valueField) return null
+
+  const seriesOrder: string[] = []
+  const seenSeries = new Set<string>()
+
+  for (const row of sourceData) {
+    const seriesLabel = String(row?.[legendField] ?? '')
+    if (!seriesLabel || seenSeries.has(seriesLabel)) continue
+    seenSeries.add(seriesLabel)
+    seriesOrder.push(seriesLabel)
+  }
+
+  const seriesTotals = new Map<string, number>()
+  for (const label of seriesOrder) {
+    seriesTotals.set(label, 0)
+  }
+
+  for (const row of matchingRows) {
+    const seriesLabel = String(row?.[legendField] ?? '')
+    if (!seriesLabel) continue
+
+    seriesTotals.set(seriesLabel, (seriesTotals.get(seriesLabel) || 0) + toFiniteNumber(row?.[valueField]))
+  }
+
+  for (const label of seriesOrder) {
+    appendTooltipMetric(tooltipValue, label, seriesTotals.get(label) || 0)
+  }
+
+  return Object.keys(tooltipValue).length > 1 ? tooltipValue : null
+}
+
+function buildSharedStackedBarTooltipFromSpec(datum: Record<string, any> | null | undefined) {
+  const chartType = props.chartType || props.config?.chart_type || ''
+  if (chartType && !SHARED_TOOLTIP_CHART_TYPES.includes(chartType)) return null
+
+  const sourceData = getSourceDataRows()
+  if (!sourceData.length) return null
+
+  const barSpec = findPrimaryBarUnitSpec(props.spec || null)
+  if (!barSpec) return null
+
+  const xField = barSpec?.encoding?.x?.field
+  const yField = barSpec?.encoding?.y?.field
+  const colorField = barSpec?.encoding?.color?.field
+
+  if (typeof xField !== 'string' || typeof yField !== 'string' || typeof colorField !== 'string') {
+    return null
+  }
+
+  const markType = typeof barSpec.mark === 'string' ? barSpec.mark : barSpec.mark?.type
+  if (markType === 'bar' && barSpec.encoding?.y?.stack === null) {
+    return null
+  }
+
+  const hoveredXValue = resolveHoveredCategoryValue(datum, xField)
+  if (hoveredXValue == null) return null
+
+  const categoryKey = normalizeCategoryValue(hoveredXValue)
+  const matchingRows = sourceData.filter(row => normalizeCategoryValue(row?.[xField]) === categoryKey)
+  if (!matchingRows.length) return null
+
+  const tooltipValue: Record<string, any> = {
+    title: formatTooltipTitle(hoveredXValue),
+  }
+
+  const foldTransform = Array.isArray(barSpec.transform)
+    ? barSpec.transform.find((transform: Record<string, any>) => (
+        Array.isArray(transform?.fold)
+        && Array.isArray(transform?.as)
+        && transform.as[0] === colorField
+        && transform.as[1] === yField
+      ))
+    : null
+
+  if (foldTransform?.fold?.length) {
+    for (const field of foldTransform.fold) {
+      if (typeof field !== 'string' || !field) continue
+
+      const totalValue = matchingRows.reduce((sum, row) => sum + toFiniteNumber(row?.[field]), 0)
+      appendTooltipMetric(tooltipValue, field, totalValue)
+    }
+
+    return Object.keys(tooltipValue).length > 1 ? tooltipValue : null
+  }
+
+  const seriesOrder: string[] = []
+  const seenSeries = new Set<string>()
+
+  for (const row of sourceData) {
+    const seriesLabel = String(row?.[colorField] ?? '')
+    if (!seriesLabel || seenSeries.has(seriesLabel)) continue
+    seenSeries.add(seriesLabel)
+    seriesOrder.push(seriesLabel)
+  }
+
+  const seriesTotals = new Map<string, number>()
+  for (const label of seriesOrder) {
+    seriesTotals.set(label, 0)
+  }
+
+  for (const row of matchingRows) {
+    const seriesLabel = String(row?.[colorField] ?? '')
+    if (!seriesLabel) continue
+
+    seriesTotals.set(seriesLabel, (seriesTotals.get(seriesLabel) || 0) + toFiniteNumber(row?.[yField]))
+  }
+
+  for (const label of seriesOrder) {
+    appendTooltipMetric(tooltipValue, label, seriesTotals.get(label) || 0)
+  }
+
+  return Object.keys(tooltipValue).length > 1 ? tooltipValue : null
+}
+
+function buildSharedStackedBarTooltipValue(datum: Record<string, any> | null | undefined) {
+  return buildSharedStackedBarTooltipFromConfig(datum) || buildSharedStackedBarTooltipFromSpec(datum)
+}
+
+function applyPieTooltipEnhancement(spec: Record<string, any>) {
+  if (Array.isArray(spec.layer)) {
+    spec.layer = spec.layer.map((layer: Record<string, any>) => applyPieTooltipEnhancement(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applyPieTooltipEnhancement(spec.spec)
+  }
+
+  if (Array.isArray(spec.concat)) {
+    spec.concat = spec.concat.map((item: Record<string, any>) => applyPieTooltipEnhancement(item))
+  }
+
+  if (Array.isArray(spec.hconcat)) {
+    spec.hconcat = spec.hconcat.map((item: Record<string, any>) => applyPieTooltipEnhancement(item))
+  }
+
+  if (Array.isArray(spec.vconcat)) {
+    spec.vconcat = spec.vconcat.map((item: Record<string, any>) => applyPieTooltipEnhancement(item))
+  }
+
+  const thetaField = spec.encoding?.theta?.field
+  if (typeof thetaField !== 'string' || !thetaField) {
+    return spec
+  }
+
+  const colorField = spec.encoding?.color?.field
+  const tooltipEntries = normalizeTooltipEntries(spec.encoding?.tooltip)
+
+  if (colorField && !hasTooltipField(tooltipEntries, colorField)) {
+    tooltipEntries.push({
+      field: colorField,
+      type: spec.encoding.color.type || 'nominal',
+      title: spec.encoding.color.title || colorField,
+    })
+  }
+
+  if (!hasTooltipField(tooltipEntries, thetaField)) {
+    tooltipEntries.push({
+      field: thetaField,
+      type: spec.encoding.theta.type || 'quantitative',
+      title: spec.encoding.theta.title || thetaField,
+    })
+  }
+
+  if (!hasTooltipField(tooltipEntries, PIE_PERCENT_FIELD)) {
+    tooltipEntries.push({
+      field: PIE_PERCENT_FIELD,
+      type: 'quantitative',
+      title: '占比',
+      format: '.1%',
+    })
+  }
+
+  const transforms = Array.isArray(spec.transform) ? spec.transform : []
+  spec.transform = [
+    ...transforms.filter((transform: Record<string, any>) => {
+      if (Array.isArray(transform?.joinaggregate)) {
+        return !transform.joinaggregate.some((aggregate: Record<string, any>) => aggregate?.as === PIE_TOTAL_FIELD)
+      }
+
+      return transform?.as !== PIE_PERCENT_FIELD
+    }),
+    {
+      joinaggregate: [{ op: 'sum', field: thetaField, as: PIE_TOTAL_FIELD }],
+    },
+    {
+      calculate: `${toDatumFieldExpr(thetaField)} / ${toDatumFieldExpr(PIE_TOTAL_FIELD)}`,
+      as: PIE_PERCENT_FIELD,
+    },
+  ]
+
+  spec.encoding = {
+    ...spec.encoding,
+    tooltip: tooltipEntries,
   }
 
   return spec
@@ -908,6 +1431,7 @@ function buildRenderableSpec(): Record<string, any> | null {
   }
 
   spec = applyDonutStyle(spec)
+  spec = applyPieTooltipEnhancement(spec)
   spec = applyDataZoom(spec)
   spec = applySideLegendLayout(spec)
 
@@ -964,6 +1488,15 @@ async function renderChart() {
     embedResult.value = null
 
     const plainSpec = JSON.parse(JSON.stringify(spec))
+    const defaultTooltipHandler = new VegaTooltipHandler({
+      formatTooltip: (tooltipValue, sanitize, maxDepth, baseURL) => {
+        if (isSharedStackedBarTooltipValue(tooltipValue)) {
+          return formatSharedStackedBarTooltipHtml(tooltipValue, sanitize)
+        }
+
+        return formatVegaTooltipValue(tooltipValue, sanitize, maxDepth, baseURL)
+      },
+    }).call
 
     console.log('Vega-Lite spec:', plainSpec)
 
@@ -976,7 +1509,19 @@ async function renderChart() {
             compiled: false,
             editor: false,
           },
-      tooltip: true,
+      tooltip: (handler: any, event: any, item: any, value: any) => {
+        if (value == null || value === '' || !item?.datum) {
+          defaultTooltipHandler(handler, event, item, null)
+          return
+        }
+
+        const sharedTooltipData = buildSharedStackedBarTooltipValue(item?.datum)
+        const sharedTooltipValue = sharedTooltipData
+          ? buildSharedTooltipPayload(sharedTooltipData, plainSpec)
+          : null
+
+        defaultTooltipHandler(handler, event, item, sharedTooltipValue ?? value)
+      },
     })
   } catch (e) {
     console.error('Vega-Lite 渲染失败:', e)
