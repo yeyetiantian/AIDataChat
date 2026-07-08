@@ -1,5 +1,9 @@
 <template>
-  <div class="vega-renderer" :class="{ 'is-fullscreen': isFullscreen }" ref="chartContainer">
+  <div
+    class="vega-renderer"
+    :class="{ 'is-fullscreen': isFullscreen, 'reserve-side-legend-space': shouldReserveSideLegendSpace }"
+    ref="chartContainer"
+  >
     <div v-if="!hasRenderableSource" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Histogram /></el-icon>
       <p>拖拽字段并点击查询生成图表</p>
@@ -24,7 +28,11 @@
       </div>
 
       <!-- 图表容器 -->
-      <div ref="vegaContainer" class="vega-container"></div>
+      <div
+        ref="vegaContainer"
+        class="vega-container"
+        :class="{ 'reserve-side-legend-space': shouldReserveSideLegendSpace }"
+      ></div>
     </template>
 
     <!-- SQL 弹窗 -->
@@ -83,6 +91,7 @@ const DATA_ZOOM_OVERVIEW_HEIGHT = 64
 const DATA_ZOOM_OVERVIEW_MIN_HEIGHT = 32
 const DATA_ZOOM_OVERVIEW_SHRINK_RATIO = 2 / 3
 const DATA_ZOOM_SPACING = 10
+const SIDE_LEGEND_LABEL_LIMIT = 140
 
 // 数据弹窗的列名：优先用 props.columns，否则从 data 首行取 key
 const displayColumns = computed(() => {
@@ -114,6 +123,18 @@ function resolveValueFieldNames(keys: string[], values: Array<Record<string, any
   return values
     .map(value => resolveFieldName(keys, value))
     .filter((field): field is string => !!field)
+}
+
+function buildRightLegend(title?: string | null) {
+  return {
+    orient: 'right',
+    direction: 'vertical',
+    columns: 1,
+    offset: 12,
+    labelLimit: SIDE_LEGEND_LABEL_LIMIT,
+    titleLimit: SIDE_LEGEND_LABEL_LIMIT,
+    ...(title ? { title } : {}),
+  }
 }
 
 function buildRadarSpec(
@@ -222,7 +243,7 @@ function buildRadarSpec(
         encoding: {
           x: { field: 'x', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
           y: { field: 'y', type: 'quantitative', axis: null, scale: { domain: [-1.25, 1.25] } },
-          color: { field: '指标', type: 'nominal', title: '指标' },
+          color: { field: '指标', type: 'nominal', title: '指标', legend: buildRightLegend('指标') },
           detail: { field: '指标', type: 'nominal' },
           order: { field: '排序', type: 'ordinal' },
           tooltip: [
@@ -305,7 +326,7 @@ function buildVegaSpec(): Record<string, any> | null {
           title: values[1].alias || values[1].field,
         },
         color: axisField
-          ? { field: axisField, type: 'nominal', title: axisTitle }
+          ? { field: axisField, type: 'nominal', title: axisTitle, legend: buildRightLegend(axisTitle) }
           : undefined,
       },
     }
@@ -314,7 +335,7 @@ function buildVegaSpec(): Record<string, any> | null {
   if (values.length > 1 && chartType !== 'pie') {
     const encoding: Record<string, any> = {
       y: { field: 'value', type: 'quantitative', title: '数值' },
-      color: { field: 'key', type: 'nominal', title: '指标' },
+      color: { field: 'key', type: 'nominal', title: '指标', legend: buildRightLegend('指标') },
     }
 
     if (axisField) {
@@ -355,14 +376,14 @@ function buildVegaSpec(): Record<string, any> | null {
 
   const encoding: any = {}
   if (chartType === 'pie') {
-    if (xField) encoding.color = { field: xField, type: 'nominal', title: xTitle }
+    if (xField) encoding.color = { field: xField, type: 'nominal', title: xTitle, legend: buildRightLegend(xTitle) }
     if (yField) encoding.theta = { field: yField, type: 'quantitative', title: yTitle }
   } else {
     if (xField) encoding.x = { field: xField, type: 'nominal', title: xTitle }
     if (yField) encoding.y = { field: yField, type: 'quantitative', title: yTitle }
     if (legend.length) {
       const lf = resolveFieldName(keys, legend[0])
-      encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf }
+      encoding.color = { field: lf, type: 'nominal', title: legend[0].alias || lf, legend: buildRightLegend(legend[0].alias || lf) }
     }
     if (['line', 'area', 'point'].includes(chartType) && isTemporalAxis) {
       encoding.x.type = 'temporal'
@@ -644,6 +665,81 @@ function applyOverviewStyle(spec: Record<string, any>) {
   return spec
 }
 
+function applySideLegendLayout(spec: Record<string, any>) {
+  if (spec.encoding?.color && spec.encoding.color.legend !== null) {
+    const currentLegend = spec.encoding.color.legend
+    const legendOptions = currentLegend && typeof currentLegend === 'object' ? currentLegend : {}
+    spec.encoding.color = {
+      ...spec.encoding.color,
+      legend: {
+        ...buildRightLegend(spec.encoding.color.title),
+        ...legendOptions,
+      },
+    }
+  }
+
+  if (Array.isArray(spec.layer)) {
+    spec.layer = spec.layer.map((layer: Record<string, any>) => applySideLegendLayout(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applySideLegendLayout(spec.spec)
+  }
+
+  if (Array.isArray(spec.concat)) {
+    spec.concat = spec.concat.map((item: Record<string, any>) => applySideLegendLayout(item))
+  }
+
+  if (Array.isArray(spec.hconcat)) {
+    spec.hconcat = spec.hconcat.map((item: Record<string, any>) => applySideLegendLayout(item))
+  }
+
+  if (Array.isArray(spec.vconcat)) {
+    spec.vconcat = spec.vconcat.map((item: Record<string, any>) => applySideLegendLayout(item))
+  }
+
+  return spec
+}
+
+function hasVisibleColorLegend(spec: Record<string, any> | null | undefined): boolean {
+  if (!spec || typeof spec !== 'object') return false
+
+  if (spec.encoding?.color && spec.encoding.color.legend !== null) {
+    return true
+  }
+
+  if (Array.isArray(spec.layer) && spec.layer.some((layer: Record<string, any>) => hasVisibleColorLegend(layer))) {
+    return true
+  }
+
+  if (spec.spec && typeof spec.spec === 'object' && hasVisibleColorLegend(spec.spec)) {
+    return true
+  }
+
+  if (Array.isArray(spec.concat) && spec.concat.some((item: Record<string, any>) => hasVisibleColorLegend(item))) {
+    return true
+  }
+
+  if (Array.isArray(spec.hconcat) && spec.hconcat.some((item: Record<string, any>) => hasVisibleColorLegend(item))) {
+    return true
+  }
+
+  if (Array.isArray(spec.vconcat) && spec.vconcat.some((item: Record<string, any>) => hasVisibleColorLegend(item))) {
+    return true
+  }
+
+  return false
+}
+
+const shouldReserveSideLegendSpace = computed(() => {
+  const chartType = props.chartType || props.config?.chart_type || ''
+  if (!['bar', 'line', 'area', 'point'].includes(chartType)) return false
+
+  if (hasVisibleColorLegend(props.spec)) return true
+
+  return hasVisibleColorLegend(buildVegaSpec())
+})
+
 function resolveExplicitHeight(value?: number | string) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
 
@@ -727,6 +823,13 @@ function applyDataZoom(spec: Record<string, any>) {
     $schema: spec.$schema || 'https://vega.github.io/schema/vega-lite/v5.json',
     ...(chartTitle ? { title: chartTitle } : {}),
     width: 'container',
+    resolve: {
+      ...(spec.resolve || {}),
+      legend: {
+        ...(spec.resolve?.legend || {}),
+        color: 'independent',
+      },
+    },
     spacing: DATA_ZOOM_SPACING,
     vconcat: [mainSpec, overviewSpec],
   }
@@ -806,6 +909,7 @@ function buildRenderableSpec(): Record<string, any> | null {
 
   spec = applyDonutStyle(spec)
   spec = applyDataZoom(spec)
+  spec = applySideLegendLayout(spec)
 
   return spec
 }
@@ -969,6 +1073,10 @@ defineExpose({
   overflow: hidden;
 }
 
+.vega-renderer.reserve-side-legend-space {
+  align-items: stretch;
+}
+
 .empty-state {
   text-align: center;
   color: #c0c4cc;
@@ -1011,6 +1119,13 @@ defineExpose({
   height: 300px;
 }
 
+.vega-container.reserve-side-legend-space {
+  width: calc(100% - clamp(128px, 16vw, 180px));
+  max-width: calc(100% - clamp(128px, 16vw, 180px));
+  align-self: flex-start;
+  overflow: visible;
+}
+
 .vega-renderer.is-fullscreen,
 .vega-renderer:fullscreen {
   width: 100vw;
@@ -1026,6 +1141,12 @@ defineExpose({
 .vega-renderer:fullscreen .vega-container {
   height: 100%;
   min-height: 0;
+}
+
+.vega-renderer.is-fullscreen .vega-container.reserve-side-legend-space,
+.vega-renderer:fullscreen .vega-container.reserve-side-legend-space {
+  width: calc(100% - clamp(160px, 14vw, 220px));
+  max-width: calc(100% - clamp(160px, 14vw, 220px));
 }
 
 .vega-renderer.is-fullscreen .chart-toolbar,
