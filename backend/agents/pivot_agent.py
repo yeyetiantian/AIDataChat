@@ -23,7 +23,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
-from core.field_registry import get_schema_for_agent
+from core.field_registry import get_schema_for_agent, get_fixed_field_names
 from llm import get_auth_headers
 from models import PivotConfig, PivotResponse
 
@@ -162,13 +162,13 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 单图表示例（默认行为）：
 {{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
 ]}}
 
 多图表示例（仅当用户明确要求时才使用）：
 {{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
   {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }},
-  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }}
+  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
 ]}}
 
 **chart_type 规则**：
@@ -299,6 +299,86 @@ def _save_trace_log(state: AgentState, session_id: str = None) -> str:
 
 # ---- 数据标准化 ----
 
+# 筛选器 op 合法值
+_FILTER_VALID_OPS = {"lt", "gt", "gte", "lte", "date_range", "between", "in"}
+
+# 固定字段名缓存（模块级，第一次调用时初始化）
+_fixed_field_names: set[str] | None = None
+
+
+def _get_fixed_names() -> set[str]:
+    global _fixed_field_names
+    if _fixed_field_names is None:
+        _fixed_field_names = get_fixed_field_names()
+    return _fixed_field_names
+
+
+def _deep_normalize_chart(chart: dict[str, Any]) -> dict[str, Any]:
+    """深度标准化单个图表配置"""
+    pc = chart.get("pivot_config")
+    if not pc or not isinstance(pc, dict):
+        return chart
+
+    fixed_names = _get_fixed_names()
+
+    # ---------- filters 处理 ----------
+    filters = pc.get("filters")
+    if isinstance(filters, list) and len(filters) > 0:
+        cleaned: list[dict] = []
+        for f in filters:
+            if not isinstance(f, dict):
+                continue
+            # 校验 field：不在固定字段中的过滤掉
+            if not f.get("field") or f["field"] not in fixed_names:
+                continue
+            # 确保 value 是数组
+            val = f.get("value")
+            if not isinstance(val, list):
+                val = [val] if val is not None else []
+            # 尝试将每个元素转为数字
+            converted: list = []
+            for v in val:
+                if isinstance(v, str):
+                    try:
+                        if "." in v or v.isdigit():
+                            converted.append(float(v) if "." in v else int(v))
+                        else:
+                            converted.append(v)
+                    except (ValueError, TypeError):
+                        converted.append(v)
+                else:
+                    converted.append(v)
+            f["value"] = converted
+            # 校验 op
+            op = f.get("op", "in")
+            if op not in _FILTER_VALID_OPS:
+                op = "in"
+            f["op"] = op
+            cleaned.append(f)
+        pc["filters"] = cleaned
+
+    # ---------- legend 处理 ----------
+    legend = pc.get("legend")
+    values = pc.get("values", [])
+    if isinstance(legend, list) and len(legend) > 0 and isinstance(values, list):
+        # 收集 values 中的 field 和 alias
+        value_fields: set[str] = set()
+        for v in values:
+            if isinstance(v, dict):
+                if v.get("field"):
+                    value_fields.add(v["field"])
+                if v.get("alias"):
+                    value_fields.add(v["alias"])
+        # 过滤 legend：field 必须出现在固定字段中或 value 字段列表中
+        pc["legend"] = [
+            l for l in legend
+            if isinstance(l, dict) and l.get("field")
+            and (l["field"] in fixed_names or l["field"] in value_fields)
+        ]
+
+    return chart
+
+
 def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]:
     """将 AgentOutput 统一标准化为 state.charts 列表
 
@@ -307,7 +387,8 @@ def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]
     3. 空列表（chat 模式）
     """
     if response.charts:
-        return [c.model_dump() for c in response.charts]
+        charts = [c.model_dump() for c in response.charts]
+        return [_deep_normalize_chart(ch) for ch in charts]
 
     return []
 
@@ -331,23 +412,6 @@ def _try_parse_json(text: str) -> dict | None:
         except json.JSONDecodeError:
             pass
     return None
-
-
-def _extract_json_fragment(text: str) -> str | None:
-    """从文本中提取 JSON 片段（跳过前置文字）"""
-    # 找第一个 {（或 {{）和最后一个 }（或 }}）
-    import re
-    start = text.find('{')
-    if start < 0:
-        start = text.find('{{')
-    if start < 0:
-        return None
-    # 从后往前找结束
-    end = text.rfind('}')
-    if end < 0 or end <= start:
-        return None
-    return text[start:end + 1]
-
 
 # ---- 校验逻辑 ----
 
