@@ -447,22 +447,37 @@ function applyDonutStyle(spec: Record<string, any>) {
   return spec
 }
 
-function isLineLikeMark(mark: unknown) {
-  if (typeof mark === 'string') return mark === 'line' || mark === 'area'
+function isDataZoomSupportedMark(mark: unknown) {
+  if (typeof mark === 'string') return mark === 'line' || mark === 'area' || mark === 'point' || mark === 'bar'
   if (!mark || typeof mark !== 'object') return false
   const type = (mark as Record<string, any>).type
-  return type === 'line' || type === 'area'
+  return type === 'line' || type === 'area' || type === 'point' || type === 'bar'
 }
 
-function hasLineLikeMark(spec: Record<string, any>) {
-  if (isLineLikeMark(spec.mark)) return true
+function hasDataZoomSupportedMark(spec: Record<string, any>) {
+  if (isDataZoomSupportedMark(spec.mark)) return true
 
   if (Array.isArray(spec.layer)) {
-    return spec.layer.some((layer: Record<string, any>) => hasLineLikeMark(layer))
+    return spec.layer.some((layer: Record<string, any>) => hasDataZoomSupportedMark(layer))
   }
 
   if (spec.spec && typeof spec.spec === 'object') {
-    return hasLineLikeMark(spec.spec)
+    return hasDataZoomSupportedMark(spec.spec)
+  }
+
+  return false
+}
+
+function hasBarMark(spec: Record<string, any>) {
+  if (typeof spec.mark === 'string' && spec.mark === 'bar') return true
+  if (typeof spec.mark === 'object' && spec.mark?.type === 'bar') return true
+
+  if (Array.isArray(spec.layer)) {
+    return spec.layer.some((layer: Record<string, any>) => hasBarMark(layer))
+  }
+
+  if (spec.spec && typeof spec.spec === 'object') {
+    return hasBarMark(spec.spec)
   }
 
   return false
@@ -496,10 +511,16 @@ function shouldApplyDataZoom(spec: Record<string, any>) {
   if (isCompositeSpec(spec) || !hasXEncoding(spec)) return false
 
   if (props.chartType) {
-    return props.chartType === 'line' || props.chartType === 'area'
+    return props.chartType === 'line' || props.chartType === 'area' || props.chartType === 'point' || props.chartType === 'bar'
   }
 
-  return hasLineLikeMark(spec)
+  return hasDataZoomSupportedMark(spec)
+}
+
+function isBarChart(spec: Record<string, any>) {
+  if (props.chartType) return props.chartType === 'bar'
+
+  return hasBarMark(spec)
 }
 
 function applyXDomainFromBrush(spec: Record<string, any>) {
@@ -519,6 +540,28 @@ function applyXDomainFromBrush(spec: Record<string, any>) {
 
   if (spec.spec && typeof spec.spec === 'object') {
     spec.spec = applyXDomainFromBrush(spec.spec)
+  }
+
+  return spec
+}
+
+function applyFilterFromBrush(spec: Record<string, any>) {
+  if (Array.isArray(spec.layer)) {
+    if (spec.data) {
+      const transforms = Array.isArray(spec.transform) ? spec.transform : []
+      if (!transforms.some((transform: Record<string, any>) => transform?.filter?.param === DATA_ZOOM_BRUSH_PARAM)) {
+        spec.transform = [...transforms, { filter: { param: DATA_ZOOM_BRUSH_PARAM } }]
+      }
+    } else {
+      spec.layer = spec.layer.map((layer: Record<string, any>) => applyFilterFromBrush(layer))
+    }
+  } else if (spec.spec && typeof spec.spec === 'object') {
+    spec.spec = applyFilterFromBrush(spec.spec)
+  } else {
+    const transforms = Array.isArray(spec.transform) ? spec.transform : []
+    if (!transforms.some((transform: Record<string, any>) => transform?.filter?.param === DATA_ZOOM_BRUSH_PARAM)) {
+      spec.transform = [...transforms, { filter: { param: DATA_ZOOM_BRUSH_PARAM } }]
+    }
   }
 
   return spec
@@ -575,6 +618,16 @@ function applyOverviewStyle(spec: Record<string, any>) {
 
     if (mark.type === 'area') {
       mark.opacity = mark.opacity ?? 0.35
+    }
+
+    if (mark.type === 'point') {
+      mark.opacity = mark.opacity ?? 0.45
+      mark.size = Math.min(Number(mark.size || 36), 36)
+      mark.filled = mark.filled ?? true
+    }
+
+    if (mark.type === 'bar') {
+      mark.opacity = mark.opacity ?? 0.6
     }
 
     spec.mark = mark
@@ -639,7 +692,9 @@ function resolveDataZoomHeights() {
 function applyDataZoom(spec: Record<string, any>) {
   if (!shouldApplyDataZoom(spec)) return spec
 
-  const mainSpec = applyXDomainFromBrush(cloneSpec(spec) || spec)
+  const mainSpec = isBarChart(spec)
+    ? applyFilterFromBrush(cloneSpec(spec) || spec)
+    : applyXDomainFromBrush(cloneSpec(spec) || spec)
   const overviewSpec = applyOverviewStyle(cloneSpec(spec) || spec)
   const { mainHeight, overviewHeight } = resolveDataZoomHeights()
   const chartTitle = spec.title

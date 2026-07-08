@@ -316,7 +316,6 @@ function toQueryFilterValue(filter: { filter_type?: string; op: string; value: u
 }
 
 function toBoardPivotRequest(config: PivotConfig) {
-  const orderByMode = config.request_meta?.order_by_mode
   const normalizedOrderBy = config.order_by ?? []
 
   return {
@@ -348,9 +347,7 @@ function toBoardPivotRequest(config: PivotConfig) {
     col_filters: config.col_filters ?? [],
     ...(normalizedOrderBy.length > 0
       ? {
-          order_by: orderByMode === 'direction'
-            ? normalizedOrderBy[0]?.direction ?? 'desc'
-            : normalizedOrderBy.map(item => ({ field: item.field, direction: item.direction })),
+          order_by: normalizedOrderBy.map(item => ({ field: item.field, direction: item.direction })),
         }
       : {}),
     ...(config.pagination ? { pagination: { ...config.pagination } } : {}),
