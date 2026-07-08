@@ -162,13 +162,13 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 单图表示例（默认行为）：
 {{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
 ]}}
 
 多图表示例（仅当用户明确要求时才使用）：
 {{"intent": "chart", "reply": "好的，分别展示各车型和各规则的数据：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }},
-  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"id": "val_1", "field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 100 }}, "chart_type": "bar" }},
+  {{ "title": "各规则类型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "rule_type", "alias": "规则类型"}}], "values": [{{"field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
 ]}}
 
 **chart_type 规则**：
@@ -186,15 +186,11 @@ suggestions 字段必须为空列表（无需生成追问）。
 **legend**（列维度/图例，【图例默认不指定，除非用户明确指定某种图例】）
 - field: 字段名（必填）
 - alias: 显示别名（必填）
-- 用于多系列对比（如按 rule_type 拆分为多条线）
-- 不填时生成单系列图表
 - 约束：字段的唯一值不宜过多（建议 ≤5），否则图表可读性差
 
 **values**（聚合值，必填，至少 1 个）
-- id: 唯一标识，按 val_1、val_2 递增（必填，校验依赖此字段）
 - field: 字段名（必填），支持固定字段和动态信号
 - alias: 显示别名（必填，默认用字段名）
-- expr: 直接嵌入计算表达式，示例：{{"id": "val_1", "expr": "TRY_CAST(\"IBSBatSOC\" AS DOUBLE)", "aggregation": "avg", "alias": "平均 SOC"}}
 - aggregation: source / count / sum / avg / min / max / count_distinct
 - 约束：count/source 可用于任意字段；/sum/avg/min/max 建议用于数值字段或动态信号列
 
@@ -360,20 +356,29 @@ def _deep_normalize_chart(chart: dict[str, Any]) -> dict[str, Any]:
     # ---------- legend 处理 ----------
     legend = pc.get("legend")
     values = pc.get("values", [])
-    if isinstance(legend, list) and len(legend) > 0 and isinstance(values, list):
-        # 收集 values 中的 field 和 alias
-        value_fields: set[str] = set()
+    # 收集 values 中的 field（全局使用，供 legend 和 order_by 校验）
+    value_fields: set[str] = set()
+    if isinstance(values, list):
         for v in values:
             if isinstance(v, dict):
                 if v.get("field"):
                     value_fields.add(v["field"])
-                if v.get("alias"):
-                    value_fields.add(v["alias"])
+
+    if isinstance(legend, list) and len(legend) > 0 and isinstance(values, list):
         # 过滤 legend：field 必须出现在固定字段中或 value 字段列表中
         pc["legend"] = [
             l for l in legend
             if isinstance(l, dict) and l.get("field")
             and (l["field"] in fixed_names or l["field"] in value_fields)
+        ]
+
+    # ---------- order_by 处理 ----------
+    ob = pc.get("order_by", [])
+    if isinstance(ob, list) and len(ob) > 0:
+        pc["order_by"] = [
+            o for o in ob
+            if isinstance(o, dict) and o.get("field")
+            and o["field"] in value_fields
         ]
 
     return chart

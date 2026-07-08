@@ -31,7 +31,6 @@ class LegendItem(BaseModel):
     field: str = Field(..., description="字段名")
     alias: Optional[str] = Field(None, description="别名")
 
-
 class ShowAs(BaseModel):
     """值显示方式"""
     type: Literal[
@@ -50,26 +49,24 @@ class ShowAs(BaseModel):
 
 class ValueItem(BaseModel):
     """值 → SQL 聚合"""
-    id: str = Field(..., description="唯一标识，如 val_1")
-    field: Optional[str] = Field(None, description="字段名（与 expr 互斥）")
+    field: Optional[str] = Field(None, description="字段名")
     aggregation: Optional[Literal["count", "sum", "avg", "min", "max", "count_distinct", "distinct"]] = Field(None, description="聚合函数")
     alias: Optional[str] = Field(None, description="别名")
-    expr: Optional[str] = Field(None, description="直接表达式（与 field+aggregation 互斥）")
     show_as: Optional[ShowAs] = Field(None, description="值显示方式")
 
 class FilterOnAgg(BaseModel):
     """聚合后过滤 → SQL HAVING"""
-    field: str = Field(..., description="字段名（可引用别名）")
+    field: str = Field(..., description="字段名")
     op: str = Field(..., description="操作符")
     value: Any = Field(..., description="值")
 
 class OrderBy(BaseModel):
     """排序"""
-    field: str = Field(..., description="排序字段")
+    field: str = Field(..., description="字段名")
     direction: Literal["asc", "desc"] = Field("desc", description="排序方向")
 
 class PivotConfig(BaseModel):
-    """完整表配置（严格四属性）"""
+    """完整表配置"""
     filters: list[FilterItem] = Field(default_factory=list, description="筛选器 → WHERE")
     axes: list[AxisItem] = Field(default_factory=list, description="轴 → GROUP BY")
     legend: list[LegendItem] = Field(default_factory=list, description="图例 → PIVOT ON")
