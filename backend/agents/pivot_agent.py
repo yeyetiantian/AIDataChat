@@ -433,7 +433,7 @@ def _validate_chart(chart: dict[str, Any]) -> str | None:
     for i, v in enumerate(values):
         if not isinstance(v, dict):
             return f"图表「{chart.get('title', '未命名')}」values[{i}] 不是有效对象"
-        if not v.get("field") and not v.get("expr"):
+        if not v.get("field"):
             return f"图表「{chart.get('title', '未命名')}」values[{i}] 缺少 field 或 expr"
 
     axes = pc.get("axes", [])
