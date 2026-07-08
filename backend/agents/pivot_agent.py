@@ -604,7 +604,9 @@ def validate_config_node(state: AgentState) -> AgentState:
                 "error": err,
             })
         else:
-            # 重试耗尽 → 报错
+            # 重试耗尽 → 报错，清除标记避免循环
+            state["validation_error"] = None
+            state["charts"] = []
             state["error"] = (state.get("error") or "") + f" 配置校验失败（已重试）：{err}"
             if not state.get("reply"):
                 state["reply"] = f"配置校验多次失败：{err}，请尝试换个问法。"
