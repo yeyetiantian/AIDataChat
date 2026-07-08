@@ -76,7 +76,7 @@ class PivotConfig(BaseModel):
     values: list[ValueItem] = Field(default_factory=list, description="值 → 聚合")
     # 扩展属性
     having: list[FilterOnAgg] = Field(default_factory=list, description="HAVING 子句（兼容字段）")
-    # order_by: list[OrderBy] = Field(default_factory=list, description="排序")
+    order_by: list[OrderBy] = Field(default_factory=list, description="排序")
     chart_type: Optional[str] = Field(None, description="图表类型：bar/line/area/point/pie/radar")
     grand_total: bool = Field(False, description="是否显示总计")
     subtotals: bool = Field(False, description="是否显示小计")
