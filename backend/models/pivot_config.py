@@ -50,7 +50,7 @@ class ShowAs(BaseModel):
 class ValueItem(BaseModel):
     """值 → SQL 聚合"""
     field: Optional[str] = Field(None, description="字段名")
-    aggregation: Optional[Literal["count", "sum", "avg", "min", "max", "count_distinct", "distinct"]] = Field(None, description="聚合函数")
+    aggregation: Optional[Literal["source","count", "sum", "avg", "min", "max"]] = Field(None, description="聚合函数")
     alias: Optional[str] = Field(None, description="别名")
     show_as: Optional[ShowAs] = Field(None, description="值显示方式")
 

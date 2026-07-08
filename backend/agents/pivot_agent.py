@@ -162,7 +162,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 
 单图表示例（默认行为）：
 {{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"], "select_ts": "2026-07-06", "select_order": 1, "filter_type": ""}}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"field": "alarm_time", "aggregation": "count", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
+  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [{{"field": "vehicle", "op": "in", "value": ["VIN1", "VIN2"] }}], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"field": "alarm_time", "aggregation": "source", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
 ]}}
 
 多图表示例（仅当用户明确要求时才使用）：
@@ -191,7 +191,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 - field: 字段名（必填），支持固定字段和动态信号
 - alias: 显示别名（必填，默认用字段名）
 - aggregation: source / count / sum / avg / min / max
-- 约束：count/source 可用于任意字段；sum/avg/min/max 建议用于数值字段或动态信号列，默认使用count/source，用户有明确要求时再使用 sum/avg/min/max。
+- 约束： 可用于任意字段；sum/avg/min/max 建议用于数值字段或动态信号列，默认使用source/count，用户有明确要求时再使用 sum/avg/min/max。
 
 **filters**（筛选条件，可选）
 - field: 字段名（必填）只能选择固定字段中的字段（不支持动态信号列）
@@ -200,14 +200,14 @@ suggestions 字段必须为空列表（无需生成追问）。
 - filter_type：筛选器类型（可选）
 - 示例：{{"field": "vehicle_type", "op": "in", "value": ["SUV", "MPV"], "filter_type": ""}}/{{"field": "alarm_time", "op": "between", "value": ["2026-06-20 00:00:00", "2026-07-01 00:00:00"], "filter_type": ""}}
 
-**having**（聚合后过滤，可选）
+**having**（聚合后过滤，默认不填，除非用户明确要求）
 - field: 聚合字段名
 - op: 只能在这里面选择【lt / gt / gte / lte / between / in】
 - value: 单个值（非数组）
 - 示例：{{"field": "vehicle_type", "op": "gt", "value": 10}}
 
-**order_by**（排序，可选）
-- field: 字段名（必填，如 "alarm_time"、"vehicle_type"）
+**order_by**（排序，默认不填，除非用户明确要求）
+- field: 字段名（必填）
 - dir: 只能在这里面选择【asc / desc】
 - 示例：{{"field": "alarm_time", "dir": "desc"}}
 
@@ -222,7 +222,7 @@ suggestions 字段必须为空列表（无需生成追问）。
 ### 约束汇总
 - axes 至少 1 个，values 至少 1 个
 - 所有字段名（field）必须来自上面的数据字段列表，不能编造不存在的字段，如果你遇到不确定或不认识的字段名，一律归类为动态信号列，使用其原始列名即可。
-- 对动态信号列（不在固定字段中的列名）做 sum/avg/min/max 聚合时，系统自动转换数值类型，直接使用列名即可"""
+- 对动态信号列（不在固定字段中的列名）做 source / count / sum / avg / min / max 聚合时，系统自动转换数值类型，直接使用列名即可"""
     return _base_system_prompt
 
 
