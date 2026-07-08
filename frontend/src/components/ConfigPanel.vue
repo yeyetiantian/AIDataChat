@@ -1460,6 +1460,14 @@ function removeItem(index: number, zone: ZoneType) {
 }
 
 function buildPivotConfig(): PivotConfig {
+  const hasManualOrderBy = stateData.sortField.length > 0
+  const requestMeta = stateData.requestMeta
+    ? {
+        ...stateData.requestMeta,
+        ...(hasManualOrderBy ? { order_by_mode: 'array' as const } : {}),
+      }
+    : (hasManualOrderBy ? { order_by_mode: 'array' as const } : undefined)
+
   return {
     filters: stateData.filters.map(serializeFilterForApi),
     axes: stateData.axes.map(a => {
@@ -1492,7 +1500,7 @@ function buildPivotConfig(): PivotConfig {
     chart_type: stateData.chartType,
     grand_total: stateData.grandTotal,
     subtotals: stateData.subtotals,
-    request_meta: stateData.requestMeta ? { ...stateData.requestMeta } : undefined,
+    request_meta: requestMeta,
   }
 }
 
