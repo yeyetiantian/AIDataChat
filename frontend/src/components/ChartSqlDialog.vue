@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visibleModel" :title="title" width="70%" top="8vh" destroy-on-close>
+  <el-dialog v-model="visibleModel" :title="title" width="700px" top="8vh" destroy-on-close>
     <div class="sql-toolbar">
       <el-button size="small" @click="copyContent">
         <el-icon><DocumentCopy /></el-icon>
