@@ -66,7 +66,6 @@
                 <VegaLiteRenderer
                   v-else
                   :ref="(el) => setRendererRef(`chat_${ci}`, el)"
-                  :spec="chart.vega_spec"
                   :data="chart.data"
                   :config="chart.pivot_config"
                   :chart-type="chart.chart_type"

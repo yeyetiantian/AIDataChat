@@ -1711,3 +1711,10 @@ defineExpose({
   line-height: 1.55;
 }
 </style>
+
+<style>
+  /* vega-tooltip 默认 z-index 1000, 低于 el-dialog 遮罩层 (~2000) */
+  #vg-tooltip-element {
+    z-index: 9999 !important;
+  }
+</style>
