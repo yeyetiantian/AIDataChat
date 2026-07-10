@@ -29,19 +29,8 @@
       </aside>
     </section>
 
-    <el-button
-      :type="showAiDialog ? 'success' : 'default'"
-      circle
-      size="large"
-      class="board-ai-button"
-      :style="{ right: showConfigPanel ? '392px' : '24px' }"
-      @click="showAiDialog = !showAiDialog"
-    >
-      <el-icon :size="20"><ChatDotRound /></el-icon>
-    </el-button>
-
     <el-dialog
-      v-model="showAiDialog"
+       v-model="showAiDialog"
       title="AI 对话分析"
       width="700px"
       top="5vh"
@@ -129,8 +118,8 @@ import { normalizeApiDate } from '@/api/filterSelect'
 import ChartBoard from '@/components/ChartBoard.vue'
 import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
+import ResizableDialog from '@/components/ResizableDialog.vue'
 import { createMockBoardCharts } from '@/constants/mockBoardCharts'
-import { ChatDotRound } from '@element-plus/icons-vue'
 import {
   clearStoredReportConfigs,
   clonePivotConfig,
@@ -157,6 +146,7 @@ type ToggleBoardCard = (SavedChart & { isPlaceholder?: false, slotIndex: number 
 
 const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
+const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 900)
 const selectedBoardKey = ref<string | number | null>(null)
 const configPanelRef = ref<ConfigPanelHandle | null>(null)
 const importDialogVisible = ref(false)
@@ -581,14 +571,28 @@ async function handleMockDataRequest() {
   }
 }
 
+function handleWindowResize() {
+  if (typeof window === 'undefined') return
+  windowHeight.value = window.innerHeight
+}
+
+function handleToggleAiDialog() {
+  showAiDialog.value = !showAiDialog.value
+}
+
 onMounted(() => {
+  handleWindowResize()
+  window.addEventListener('resize', handleWindowResize)
   window.addEventListener('board:mock-data', handleMockDataRequest)
   window.addEventListener('board:clear-all', handleClearBoardRequest)
+  window.addEventListener('board:toggle-ai', handleToggleAiDialog)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleWindowResize)
   window.removeEventListener('board:mock-data', handleMockDataRequest)
   window.removeEventListener('board:clear-all', handleClearBoardRequest)
+  window.removeEventListener('board:toggle-ai', handleToggleAiDialog)
 })
 </script>
 
@@ -639,10 +643,10 @@ onBeforeUnmount(() => {
 .board-sidebar-inner {
   width: 368px;
   height: 100%;
-  padding: 10px 10px 10px 12px;
+  padding: 10px 10px 0 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .board-sidebar-content {
@@ -655,18 +659,13 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 0 0 4px;
+  margin: 0 -10px 0 -12px;
+  padding: 10px 10px 12px 12px;
   border-top: 1px solid #e4e7ed;
-  padding-top: 10px;
-}
-
-.board-ai-button {
-  position: fixed;
-  bottom: 24px;
-  z-index: 1000;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transition: right 0.24s ease;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.04);
 }
 
 .config-import-empty {
@@ -757,10 +756,6 @@ onBeforeUnmount(() => {
 
   .board-sidebar-inner {
     width: min(368px, calc(100vw - 48px));
-  }
-
-  .board-ai-button {
-    right: 24px !important;
   }
 }
 </style>

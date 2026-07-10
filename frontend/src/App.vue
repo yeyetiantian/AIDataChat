@@ -8,6 +8,18 @@
       <div class="header-right">
         <button
           type="button"
+          class="header-action-button header-action-button--ai"
+          title="AI 分析"
+          @click="handleToggleAi"
+        >
+          <span class="header-action-icon">
+            <el-icon :size="15"><ChatDotRound /></el-icon>
+          </span>
+          <span>AI 分析</span>
+        </button>
+
+        <button
+          type="button"
           class="header-action-button header-action-button--primary"
           title="数据模拟"
           @click="handleMockBoardData"
@@ -40,11 +52,11 @@
 <script setup lang="ts">
 import { nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { Collection } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
-async function dispatchBoardEvent(eventName: 'board:mock-data' | 'board:clear-all') {
+async function dispatchBoardEvent(eventName: 'board:mock-data' | 'board:clear-all' | 'board:toggle-ai') {
   if (router.currentRoute.value.path !== '/board') {
     await router.push('/board')
     await nextTick()
@@ -58,6 +70,10 @@ function handleMockBoardData() {
 
 function handleClearBoard() {
   void dispatchBoardEvent('board:clear-all')
+}
+
+function handleToggleAi() {
+  void dispatchBoardEvent('board:toggle-ai')
 }
 </script>
 
@@ -167,6 +183,22 @@ html, body, #app {
 
 .header-action-button--primary:focus-visible {
   box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+}
+
+.header-action-button--ai {
+  border-color: #d7e8d0;
+  color: #2f7d32;
+  background: #f3faf1;
+}
+
+.header-action-button--ai:hover {
+  background: #e8f6e4;
+  border-color: #bfe0b4;
+  box-shadow: 0 4px 10px rgba(47, 125, 50, 0.12);
+}
+
+.header-action-button--ai:focus-visible {
+  box-shadow: 0 0 0 3px rgba(47, 125, 50, 0.16);
 }
 
 .header-action-button--danger {

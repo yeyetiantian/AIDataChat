@@ -1780,6 +1780,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   height: 100%;
+  min-height: 0;
 }
 
 .panel-section {
@@ -1787,6 +1788,10 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   border: 1px solid #e4e7ed;
   overflow: hidden;
+}
+
+.panel-section:not(.config-section) {
+  flex-shrink: 0;
 }
 
 .section-header {
@@ -1822,6 +1827,24 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.config-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.config-section .config-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.config-body > * {
+  flex-shrink: 0;
 }
 
 /* 字段列表内联样式 */
@@ -1874,7 +1897,7 @@ onBeforeUnmount(() => {
 
 .field-items {
   padding: 2px 4px;
-  height: 150px;
+  height: clamp(150px, 18vh, 260px);
   overflow-y: auto;
 }
 
@@ -1911,6 +1934,8 @@ onBeforeUnmount(() => {
 
 /* 四象限拖拽区 */
 .zones-grid {
+  flex: 0.9 1 120px;
+  min-height: 120px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
@@ -1924,13 +1949,18 @@ onBeforeUnmount(() => {
   min-height: 100px;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 
 .zone-card--filters {
+  flex: 1.05 1 150px;
+  min-height: 150px;
   margin-bottom: 6px;
 }
 
 .zone-card.value {
+  flex: 1.05 1 150px;
+  min-height: 150px;
   margin-top: 6px;
 }
 
@@ -1958,7 +1988,9 @@ onBeforeUnmount(() => {
 .zone-body {
   padding: 4px 6px;
   min-height: 28px;
-  flex: 1;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .zone-body.empty {
@@ -2116,9 +2148,16 @@ onBeforeUnmount(() => {
 }
 
 .zone-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   gap: 6px;
-  padding-top: 4px;
+  margin: 4px -8px 0;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  border-top: 1px solid #ebeef5;
+  box-shadow: 0 -6px 14px rgba(15, 23, 42, 0.05);
 }
 
 .zone-actions .el-button {

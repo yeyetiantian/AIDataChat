@@ -348,9 +348,11 @@ watch(() => chatStore.messages.length, async () => {
 .ai-dialog {
   display: flex;
   flex-direction: column;
-  height: 80vh;
+  width: 100%;
+ height: 80vh;
+  min-width: 0;
+  min-height: 0;
   background: white;
-  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -370,6 +372,7 @@ watch(() => chatStore.messages.length, async () => {
 
 .dialog-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
 }
@@ -404,6 +407,7 @@ watch(() => chatStore.messages.length, async () => {
 .message {
   margin-bottom: 16px;
   display: flex;
+  width: 100%;
 }
 
 .message.user {
@@ -415,7 +419,8 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .message-content {
-  max-width: 85%;
+  max-width: 100%;
+  min-width: 0;
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 14px;
@@ -423,12 +428,15 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .message.user .message-content {
+  max-width: min(85%, 640px);
   background: #409eff;
   color: white;
   border-radius: 12px 4px 12px 12px;
 }
 
 .message.assistant .message-content {
+  width: 100%;
+  max-width: 100%;
   background: #f0f2f5;
   color: #303133;
   border-radius: 4px 12px 12px 12px;
@@ -439,6 +447,10 @@ watch(() => chatStore.messages.length, async () => {
   word-break: break-word;
 }
 
+.message-charts {
+  width: 100%;
+}
+
 .chart-title {
   font-size: 13px;
   font-weight: 600;
@@ -447,18 +459,28 @@ watch(() => chatStore.messages.length, async () => {
 }
 
 .chart-card {
-  width: 500px;
+  width: 100%;
+  max-width: 100%;
   background: white;
+  border: 1px solid #ebeef5;
   border-radius: 8px;
   margin: 10px 0;
+  box-sizing: border-box;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 8px 12px;
+}
+
+.card-title {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .card-actions {
@@ -537,6 +559,7 @@ watch(() => chatStore.messages.length, async () => {
   padding: 12px 16px;
   border-top: 1px solid #ebeef5;
   align-items: flex-end;
+  flex-shrink: 0;
 }
 
 .dialog-input .el-textarea {
@@ -549,6 +572,8 @@ watch(() => chatStore.messages.length, async () => {
 
 .card-chart {
   min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .chart-error {
@@ -584,5 +609,25 @@ watch(() => chatStore.messages.length, async () => {
   background: #2559b3;
   border-color: #2559b3;
   color: #ffffff;
+}
+
+@media (max-width: 767px) {
+  .dialog-messages {
+    padding: 12px;
+  }
+
+  .message-content {
+    max-width: 100%;
+  }
+
+  .message.user .message-content,
+  .message.assistant .message-content {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dialog-input {
+    padding: 10px 12px;
+  }
 }
 </style>

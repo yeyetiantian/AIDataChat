@@ -273,8 +273,8 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   background: #f5f7fa;
-  padding: 16px;
-  overflow-y: auto;
+  padding: 14px;
+  overflow: hidden;
 }
 
 .board-header {
@@ -302,14 +302,20 @@ onMounted(async () => {
 }
 
 .chart-grid {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 14px;
   align-items: stretch;
 }
 
 .chart-card {
   position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: white;
   border-radius: 12px;
   overflow: hidden;
@@ -343,10 +349,11 @@ onMounted(async () => {
 }
 
 .card-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  padding: 12px 16px;
+  align-items: center;
+  padding: 10px 14px;
   border-bottom: 1px solid #f2f3f5;
   gap: 12px;
 }
@@ -356,6 +363,9 @@ onMounted(async () => {
   font-weight: 600;
   color: #303133;
   line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-title-wrap {
@@ -370,7 +380,7 @@ onMounted(async () => {
 .selected-chip {
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  height: 20px;
   padding: 0 8px;
   border-radius: 999px;
   background: #eff6ff;
@@ -417,21 +427,44 @@ onMounted(async () => {
 }
 
 .card-desc {
-  padding: 8px 16px;
+  flex-shrink: 0;
+  padding: 6px 14px;
   font-size: 12px;
   color: #909399;
   line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .card-chart {
-  padding: 12px;
-  min-height: 240px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.card-chart :deep(.vega-renderer) {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  border-radius: 6px;
+}
+
+.card-chart :deep(.vega-container) {
+  height: 100%;
+  min-height: 0;
 }
 
 .draft-placeholder {
-  min-height: 240px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   border: 1px dashed #d9e3f0;
-  border-radius: 12px;
+  border-radius: 8px;
   background: linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
   display: flex;
   flex-direction: column;
@@ -457,18 +490,36 @@ onMounted(async () => {
 }
 
 .card-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 7px 14px;
   border-top: 1px solid #f2f3f5;
   font-size: 12px;
   color: #909399;
 }
 
+.card-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 1200px) {
+  .chart-board {
+    overflow-y: auto;
+  }
+
   .chart-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+  }
+
+  .chart-card {
+    min-height: 360px;
   }
 }
 
