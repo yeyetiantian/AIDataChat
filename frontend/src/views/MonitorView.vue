@@ -478,7 +478,7 @@ const spanDetailItem = ref<TraceSpan | null>(null)
 const activeSpanDetailTab = ref<'input' | 'output' | 'messages' | 'metadata'>('input')
 
 const spanDetailTabs = computed(() => {
-  const tabs = [
+  const tabs: any[] = [
     { key: 'input' as const, label: 'Input' },
     { key: 'output' as const, label: 'Output' },
   ]

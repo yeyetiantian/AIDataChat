@@ -1,6 +1,9 @@
 <template>
   <el-dialog v-model="visible" :title="title" :width="width" :top="top" destroy-on-close>
     <slot></slot>
+    <template #footer>
+      <slot name="footer"></slot>
+    </template>
   </el-dialog>
 </template>
 

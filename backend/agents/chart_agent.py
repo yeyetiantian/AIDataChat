@@ -427,6 +427,40 @@ def analyze_node(state: ChartState) -> ChartState:
     parent_span: SpanNode | None = state.get("trace_span")
     sp: SpanNode | None = parent_span.add_child("analyze", "llm", input={"message": state["user_message"]}) if (tc and parent_span) else None
 
+    # 强制问卷：看板意图但用户没有提供具体图表信息
+    _is_dashboard_but_vague = False
+    _user_msg = state["user_message"]
+    _vague_keywords = ["创建一个看板", "新建看板", "帮我做一个看板", "帮忙创建一个看板", "建一个看板"]
+    _has_specific_chart = any(kw in _user_msg for kw in ["图表", "图", "柱状", "折线", "饼图", "趋势", "分布", "对比", "排名"])
+    if any(kw in _user_msg for kw in _vague_keywords) and not _has_specific_chart:
+        _is_dashboard_but_vague = True
+        logger.info("analyze_node: 检测到模糊看板请求，直接返回问券")
+        from core.chat_db import list_all_tasks
+        task_options = []
+        try:
+            tasks = list_all_tasks(limit=30)
+            task_options = [{"label": f"(TASK_ID={t['TASK_ID']}) {t.get('TASK_NAME', '')}", "value": str(t['TASK_ID'])} for t in tasks]
+        except Exception:
+            pass
+
+        state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
+        state["suggestions"] = []
+        state["charts"] = []
+        state["ask_questions"] = [
+            {"id": "board_name", "question": "看板名称是什么？", "type": "input", "options": [], "placeholder": "如：车辆报警监控看板", "required": True},
+            {"id": "chart_count", "question": "需要包含几个图表？", "type": "select", "options": [
+                {"label": "2个", "value": "2"}, {"label": "3个", "value": "3", "recommended": True},
+                {"label": "4个", "value": "4"}, {"label": "5个", "value": "5"}, {"label": "6个", "value": "6"}
+            ], "placeholder": "", "required": True},
+            {"id": "task_id", "question": "需要关联哪个任务？", "type": "select", "options": [
+                {"label": "不关联任务", "value": "", "recommended": True},
+            ] + task_options, "placeholder": "", "required": False},
+        ]
+        state["pending_step"] = "awaiting_questions"
+        if sp:
+            sp.finish(output={"reply": state["reply"], "ask_questions": len(state["ask_questions"])})
+        return state
+
     try:
         structured_llm = get_structured_llm(AgentOutput)
         system_parts = [_get_chart_system_prompt()]

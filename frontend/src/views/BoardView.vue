@@ -33,16 +33,6 @@
     </section>
 
     <el-dialog
-      v-model="showAiDialog"
-      top="5vh"
-      destroy-on-close
-      :show-close="false"
-      class="ai-full-dialog"
-    >
-      <AIDialog @save="handleSaveToBoard" @close="showAiDialog = false" />
-    </el-dialog>
-
-    <el-dialog
       v-model="importDialogVisible"
       title="导入配置"
       width="560px"
@@ -120,7 +110,6 @@ import type { Board } from '@/stores/useBoardStore'
 import type { PivotConfig } from '@/types'
 import { normalizeApiDate } from '@/api/filterSelect'
 import ChartBoard from '@/components/ChartBoard.vue'
-import AIDialog from '@/components/AIDialog.vue'
 import ConfigPanel from '@/components/ConfigPanel.vue'
 import ResizableDialog from '@/components/ResizableDialog.vue'
 import { createMockBoardCharts } from '@/constants/mockBoardCharts'
@@ -149,7 +138,6 @@ type ToggleBoardCard = (SavedChart & { isPlaceholder?: false, slotIndex: number 
   isPlaceholder?: boolean
 }
 
-const showAiDialog = ref(false)
 const showConfigPanel = ref(false)
 const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 900)
 const selectedBoardKey = ref<string | number | null>(null)
@@ -375,7 +363,6 @@ async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | '
     ElMessage.warning(chartStore.error || `每个柔性报表最多只能保存 ${MAX_BOARD_CHARTS} 个图表`)
     return
   }
-  showAiDialog.value = false
 }
 
 async function createEmptyBoard(preferredSlot?: number) {

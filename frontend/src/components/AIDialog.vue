@@ -51,28 +51,25 @@
             <svg v-if="!isFullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
             <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>
           </button>
-          <button class="topbar-btn" @click="showSettings=true" title="设置">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-          </button>
           <button class="topbar-btn" @click="$emit('close')" title="关闭">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
       </div>
-        <!-- 历史下拉 -->
-        <div class="history-dropdown-wrapper">
-          <div v-if="historyOpen" class="history-dropdown-overlay" @click="historyOpen=false" />
-          <div class="history-dropdown" :class="{ 'is-open': historyOpen }">
+      <!-- 历史下拉 -->
+      <div class="history-dropdown-wrapper">
+        <div v-if="historyOpen" class="history-dropdown-overlay" @click="historyOpen=false" />
+        <div class="history-dropdown" :class="{ 'is-open': historyOpen }">
 
-            <div class="hd-list">
-              <div v-for="s in chatStore.sessions" :key="s.id" class="hd-item" :class="{ active: s.id===chatStore.activeSessionId }" @click="chatStore.switchSession(s.id); historyOpen=false">
-                <svg class="hd-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-                <span class="hd-title">{{ s.title }}</span>
-                <button class="hd-del" @click.stop="chatStore.deleteSession(s.id)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-              </div>
+          <div class="hd-list">
+            <div v-for="s in chatStore.sessions" :key="s.id" class="hd-item" :class="{ active: s.id===chatStore.activeSessionId }" @click="chatStore.switchSession(s.id); historyOpen=false">
+              <svg class="hd-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              <span class="hd-title">{{ s.title }}</span>
+              <button class="hd-del" @click.stop="chatStore.deleteSession(s.id)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
           </div>
         </div>
+      </div>
 
       <!-- 消息区 -->
       <div class="dialog-messages" ref="msgsRef">
@@ -94,6 +91,15 @@
           </div>
           <div class="msg-bubble">
             <div class="msg-text">{{ msg.content }}</div>
+            <!-- 交互式问卷 -->
+            <div v-if="msg.ask_questions?.length && msg.role === 'assistant'" class="msg-questions">
+              <AskQuestionsPanel
+                :prompt="msg.content"
+                :questions="msg.ask_questions"
+                @submit="handleQuestionSubmit($event, msg)"
+                @cancel="() => {}"
+              />
+            </div>
             <div v-if="msg.charts?.length" class="msg-charts">
               <div v-for="(ch,ci) in msg.charts" :key="ci" class="chart-card">
                 <div class="chart-card-hd">
@@ -102,7 +108,7 @@
                     <button title="查看数据" @click="openData(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></button>
                     <button title="查看配置" @click="openCfg(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
                     <button title="查看SQL" @click="openSql(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
-                    <button title="保存到看板" @click="openSave(ch,ci)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></button>
+                    <button title="保存到看板" @click="openSave(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></button>
                   </div>
                 </div>
                 <div class="chart-card-body">
@@ -135,47 +141,9 @@
       </div>
     </div>
 
-    <!-- 弹窗：数据 -->
-    <el-dialog v-model="dlgData" title="查看数据" width="80%" top="5vh" destroy-on-close>
-      <el-table v-if="selChart?.data" :data="selChart.data" border stripe size="small" max-height="500" style="width:100%">
-        <el-table-column v-for="col in dataCols" :key="col" :prop="col" :label="col" min-width="100" />
-      </el-table>
-    </el-dialog>
-    <!-- 弹窗：配置 -->
-    <el-dialog v-model="dlgCfg" title="查看配置" width="60%" top="5vh" destroy-on-close>
-      <pre class="code-block">{{ cfgContent }}</pre>
-    </el-dialog>
-    <!-- 弹窗：SQL -->
-    <el-dialog v-model="dlgSql" title="查看 SQL" width="70%" top="5vh" destroy-on-close>
-      <pre class="code-block sql">{{ selChart?.sql||'-- 无 SQL' }}</pre>
-    </el-dialog>
-    <!-- 弹窗：保存到看板 -->
-    <el-dialog v-model="dlgSave" title="保存到看板" width="400px" destroy-on-close>
-      <el-form label-position="top">
-        <el-form-item label="图表名称"><el-input v-model="saveTitle" placeholder="输入图表名称" /></el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dlgSave=false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
-      </template>
-    </el-dialog>
-    <!-- 弹窗：设置 -->
-    <el-dialog v-model="showSettings" title="设置" width="500px" destroy-on-close>
-      <el-tabs v-model="settingsTab">
-        <el-tab-pane label="用户配置" name="cfg">
-          <p style="font-size:13px;color:#6b7280;margin-bottom:12px;">编辑 JSON 配置，保存后生效。</p>
-          <el-input v-model="editCfgText" type="textarea" :rows="10" resize="vertical" placeholder="{ }" />
-          <div v-if="cfgErr" style="color:#ef4444;font-size:13px;margin-top:8px;">{{ cfgErr }}</div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-            <el-button @click="showSettings=false">取消</el-button>
-            <el-button type="primary" @click="handleSaveCfg">保存</el-button>
-          </div>
-        </el-tab-pane>
-        <el-tab-pane label="关于" name="about">
-          <p style="margin:0;line-height:2;color:#374151;"><strong>AI 数据分析助手</strong><br>版本：1.0.0<br>基于 LangGraph + GPT-4o<br>支持报表推荐与规则推荐</p>
-        </el-tab-pane>
-      </el-tabs>
-    </el-dialog>
+    <ChartDataDialog ref="dataDialogRef" />
+    <ChartSqlDialog ref="sqlDialogRef" />
+    <SaveToBoardDialog ref="saveDialogRef" />
   </div>
 </template>
 
@@ -185,8 +153,11 @@ import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChartStore, MAX_BOARD_CHARTS } from '@/stores/useChartStore'
 import { useBoardStore } from '@/stores/useBoardStore'
-import type { PivotConfig } from '@/types'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
+import AskQuestionsPanel from './AskQuestionsPanel.vue'
+import ChartDataDialog from './ChartDataDialog.vue'
+import ChartSqlDialog from './ChartSqlDialog.vue'
+import SaveToBoardDialog from './SaveToBoardDialog.vue'
 
 const chatStore = useChatStore()
 const chartStore = useChartStore()
@@ -198,25 +169,13 @@ const sidebarOpen = ref(false)
 const historyOpen = ref(false)
 const isFullscreen = ref(false)
 const inputText = ref('')
-const msgsRef = ref<HTMLElement|null>(null)
 const taRef = ref<HTMLTextAreaElement|null>(null)
 const scrollAnchor = ref<HTMLElement|null>(null)
+const dataDialogRef = ref<any>(null)
+const sqlDialogRef = ref<any>(null)
+const saveDialogRef = ref<any>(null)
 
-const dlgData = ref(false)
-const dlgCfg = ref(false)
-const dlgSql = ref(false)
-const dlgSave = ref(false)
-const showSettings = ref(false)
-const settingsTab = ref('cfg')
-const editCfgText = ref('')
-const cfgErr = ref('')
-const selChart = ref<any>(null)
-const saveTitle = ref('')
-const saving = ref(false)
 const rendererRefs = ref<Record<string,any>>({})
-
-const dataCols = computed(() => selChart.value?.data?.length ? Object.keys(selChart.value.data[0]) : [])
-const cfgContent = computed(() => selChart.value?.pivot_config ? JSON.stringify(selChart.value.pivot_config, null, 2) : '-- 无配置')
 
 const emptyTips = computed(() => chatStore.mode==='chart'
   ? ['各车型触发次数分布','按周统计报警趋势','各规则类型占比']
@@ -247,39 +206,43 @@ function handleSwitch(id:string) {
   nextTick(()=>scrollToBottom())
 }
 
-
-
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
+}
+
+/**
+ * 用户提交问卷答案 → 发给 AI 继续处理
+ */
+async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
+  const answerLines = Object.entries(answers).map(([key, val]) => {
+    const q = (msg.ask_questions || []).find((q: any) => q.id === key)
+    const label = q?.question || key
+    if (Array.isArray(val)) {
+      return '- ' + label + ': ' + val.join(', ')
+    }
+    return '- ' + label + ': ' + val
+  })
+  const structuredMsg = '我的看板需求：\n' + answerLines.join('\n')
+  inputText.value = structuredMsg
+  handleSend()
 }
 
 function scrollToBottom() {
   nextTick(()=>scrollAnchor.value?.scrollIntoView({behavior:'smooth'}))
 }
 
-function openData(ch:any) { selChart.value=ch; dlgData.value=true }
-function openCfg(ch:any) { selChart.value=ch; dlgCfg.value=true }
-function openSql(ch:any) { selChart.value=ch; dlgSql.value=true }
-function openSave(ch:any, _idx?:number) { selChart.value=ch; saveTitle.value=ch.title||''; dlgSave.value=true }
-
-async function handleSave() {
-  if(!selChart.value||!saveTitle.value.trim()) return
-  saving.value=true
-  try {
-    const bid=boardStore.activeBoardId; if(!bid){ElMessage.warning('请先选择一个看板');return}
-    await chartStore.fetchCharts(bid)
-    if(chartStore.charts.length>=MAX_BOARD_CHARTS) { ElMessage.warning(`看板最多 ${MAX_BOARD_CHARTS} 个`); return }
-    const ok=await chartStore.saveChart(saveTitle.value.trim(), selChart.value.pivot_config||{filters:[],axes:[],legend:[],values:[]},'', selChart.value.chart_type||'bar', null, selChart.value.data, bid)
-    if(!ok) { ElMessage.warning(chartStore.error||'保存失败'); return }
-    ElMessage.success('已保存到看板'); dlgSave.value=false
-  } finally { saving.value=false }
+function openData(ch:any) { 
+  dataDialogRef.value?.open(ch.data)
 }
-
-function handleSaveCfg() {
-  cfgErr.value=''
-  try { JSON.parse(editCfgText.value); chatStore.updateUserConfig(editCfgText.value); ElMessage.success('配置已保存'); showSettings.value=false }
-  catch { cfgErr.value='JSON 格式错误' }
+function openCfg(ch:any) { 
+  sqlDialogRef.value?.open(ch.pivot_config, 'json')
 }
+function openSql(ch:any) { 
+  sqlDialogRef.value?.open(ch.sql, 'sql')
+}
+function openSave(ch:any) { 
+  saveDialogRef.value?.open(ch)
+ }
 
 function fmtTime(ts:string) {
   const d=new Date(ts), n=new Date()
@@ -289,10 +252,6 @@ function fmtTime(ts:string) {
   return d.toLocaleDateString('zh-CN')
 }
 
-onMounted(()=>{
-  editCfgText.value=chatStore.userConfig
-})
-watch(()=>chatStore.userConfig,v=>{ editCfgText.value=v })
 watch(isFullscreen,(val)=>{ sidebarOpen.value=val })
 watch(()=>chatStore.messages.length,()=>scrollToBottom())
 </script>

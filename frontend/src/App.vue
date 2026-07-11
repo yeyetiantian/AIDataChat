@@ -10,6 +10,7 @@
           type="button"
           class="header-action-button header-action-button--ai"
           title="AI 分析"
+          @click="showAiDialog = true"
         >
           <span class="header-action-icon">
             <el-icon :size="15"><ChatDotRound /></el-icon>
@@ -101,6 +102,11 @@
       </div>
     </Teleport>
 
+    <!-- AI 对话弹窗 -->
+    <el-dialog v-model="showAiDialog" top="5vh" destroy-on-close :show-close="false" class="ai-full-dialog">
+      <AIDialog @close="showAiDialog = false" />
+    </el-dialog>
+
     <div class="app-body">
       <main class="app-main">
         <router-view />
@@ -115,6 +121,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChatStore } from '@/stores/useChatStore'
 import { useBoardStore } from '@/stores/useBoardStore'
+import AIDialog from '@/components/AIDialog.vue'
 import { ChatDotRound, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -203,6 +210,8 @@ async function handleDeleteBoard(board: any) {
 }
 
 const chatStore = useChatStore()
+const showAiDialog = ref(false)
+
 const userOpen = ref(false)
 const userList = computed(() => chatStore.userList)
 const enableUserSwitch = (() => {
@@ -591,6 +600,5 @@ html, body, #app {
 .tab-menu-item:hover { background: #f3f4f6; }
 .tab-menu-item--danger { color: #d14343; }
 .tab-menu-item--danger:hover { background: #fff5f5; }
-
 
 </style>
