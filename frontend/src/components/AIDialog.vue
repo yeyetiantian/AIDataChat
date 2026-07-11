@@ -513,6 +513,7 @@ watch(()=>chatStore.messages.length,()=>scrollToBottom())
 /* ====== 消息区 ====== */
 .dialog-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
 }
