@@ -11,6 +11,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
     "element-plus": "^2.14.2",
+    "mermaid": "^11.16.0",
     "pinia": "^3.0.4",
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.3",

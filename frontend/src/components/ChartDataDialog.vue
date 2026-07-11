@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visibleModel" :title="title" width="80%" top="5vh" destroy-on-close>
+  <ModelDialog ref="modelRef" title="查看数据" width="70%" top="5vh">
     <div class="data-toolbar">
       <el-input
         v-model="searchQuery"
@@ -13,13 +13,16 @@
         </template>
       </el-input>
       <span class="data-count">共 {{ filteredData.length }} 条</span>
+      <el-button size="small" @click="handleExport">
+        <el-icon><Download /></el-icon> 导出 Excel
+      </el-button>
     </div>
     <div class="data-table-wrap">
       <el-table
         :data="filteredData"
         border
         stripe
-        height="55vh"
+        max-height="65vh"
         size="small"
         style="width: 100%"
       >
@@ -37,48 +40,69 @@
         <p>暂无数据</p>
       </div>
     </div>
-  </el-dialog>
+  </ModelDialog>
 </template>
 
 <script setup lang="ts">
+import ModelDialog from './ModelDialog.vue'
 import { computed, ref } from 'vue'
-import { Search, FolderOpened } from '@element-plus/icons-vue'
+import { Search, FolderOpened, Download } from '@element-plus/icons-vue'
 
-const props = withDefaults(defineProps<{
-  visible: boolean
-  data?: Record<string, any>[] | null
-  title?: string
-}>(), {
-  data: () => [],
-  title: '查看数据',
-})
-
-const emit = defineEmits<{
-  'update:visible': [value: boolean]
-}>()
-
-const visibleModel = computed({
-  get: () => props.visible,
-  set: (v) => emit('update:visible', v),
-})
+const modelRef = ref<InstanceType<typeof ModelDialog> | null>(null)
+const data = ref<any[]>([])
 
 const searchQuery = ref('')
 
 const columns = computed(() => {
-  if (!props.data || props.data.length === 0) return []
-  return Object.keys(props.data[0])
+  if (!data.value || data.value.length === 0) return []
+  return Object.keys(data.value[0])
 })
 
 const filteredData = computed(() => {
-  if (!props.data || props.data.length === 0) return []
-  if (!searchQuery.value.trim()) return props.data
+  if (!data.value || data.value.length === 0) return []
+  if (!searchQuery.value.trim()) return data.value    
   const q = searchQuery.value.trim().toLowerCase()
-  return props.data.filter(row =>
+  return data.value.filter(row =>
     Object.values(row).some(val =>
       String(val ?? '').toLowerCase().includes(q)
     )
   )
 })
+
+const open = (ch: any[]) => {
+  data.value = ch
+  modelRef.value?.open()
+}
+
+defineExpose({
+  open
+})
+
+function handleExport() {
+  if (!data.value || data.value.length === 0) return
+  // UTF-8 BOM for Excel 中文兼容
+  const bom = '﻿'
+  // 表头
+  const headers = columns.value.join(',')
+  // 行数据，处理含逗号/引号/换行的值
+  const rows = filteredData.value.map(row =>
+    columns.value.map(col => {
+      let val = String(row[col] ?? '')
+      if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+        val = '"' + val.replace(/"/g, '""') + '"'
+      }
+      return val
+    }).join(',')
+  )
+  const csv = bom + [headers, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `数据导出_${new Date().toISOString().slice(0, 10)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
 </script>
 
 <style scoped>
@@ -86,7 +110,9 @@ const filteredData = computed(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  position: absolute;
+  top: 11px;
+  right: 45px;
 }
 
 .data-count {

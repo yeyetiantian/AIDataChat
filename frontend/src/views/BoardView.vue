@@ -1,6 +1,7 @@
 <template>
   <div class="board-view">
     <section class="board-workspace">
+      <!-- 看板主区域 -->
       <div class="board-main">
         <div class="board-list-wrap">
           <ChartBoard
@@ -10,17 +11,19 @@
         </div>
       </div>
 
-      <aside class="board-sidebar" :class="{ 'is-open': showConfigPanel }">
-        <div class="board-sidebar-inner">
-          <div class="board-sidebar-content">
+      <!-- 配置侧边栏 -->
+      <aside class="config-sidebar" :class="{ 'is-open': showConfigPanel }">
+        <div class="config-sidebar-inner">
+          <div class="config-sidebar-content">
             <ConfigPanel
               ref="configPanelRef"
               v-if="showConfigPanel"
               :api="pivotApi"
-              :config-name="selectedBoard?.title || ''"
+              :config-name="selectedChart?.title || ''"
+              @close="closeConfigPanel"
             />
           </div>
-          <div v-if="showConfigPanel" class="board-sidebar-footer">
+          <div v-if="showConfigPanel" class="config-sidebar-footer">
             <el-button size="small" type="primary" @click="openImportConfigDialog">导入配置</el-button>
             <el-button size="small" @click="openImportJsonDialog">导入 JSON</el-button>
             <el-button size="small" type="danger" @click="closeConfigPanel">关闭配置</el-button>
@@ -42,10 +45,10 @@
 
     <el-dialog
       v-model="showAiDialog"
-      title="AI 对话分析"
-      width="700px"
       top="5vh"
       destroy-on-close
+      :show-close="false"
+      class="ai-full-dialog"
     >
       <AIDialog @save="handleSaveToBoard" @close="showAiDialog = false" />
     </el-dialog>
@@ -99,7 +102,7 @@
       destroy-on-close
     >
       <div class="config-import-json-tip">
-        粘贴实际查询请求 JSON，系统会反向生成当前配置面板，回显后自动执行“加载报表数据”。
+        粘贴实际查询请求 JSON，系统会反向生成当前配置面板，回显后自动执行"加载报表数据"。
       </div>
       <el-input
         v-model="importJsonText"
@@ -122,8 +125,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MAX_BOARD_CHARTS, useChartStore } from '@/stores/useChartStore'
-import type { SavedChart } from '@/stores/useChartStore'
+import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
+import { useBoardStore } from '@/stores/useBoardStore'
+import type { Board } from '@/stores/useBoardStore'
 import type { PivotConfig } from '@/types'
 import { normalizeApiDate } from '@/api/filterSelect'
 import ChartBoard from '@/components/ChartBoard.vue'
@@ -140,6 +144,7 @@ import {
 import { normalizeImportedPivotRequest } from '@/utils/pivotConfigImport'
 
 const chartStore = useChartStore()
+const boardStore = useBoardStore()
 
 type ConfigPanelHandle = {
   setDefaultValues: (config: PivotConfig) => Promise<void>
@@ -164,19 +169,13 @@ const importJsonDialogVisible = ref(false)
 const importJsonText = ref('')
 const savedReportConfigs = ref<StoredReportConfig[]>([])
 const selectedImportConfigId = ref('')
-const selectedBoard = computed(() => chartStore.charts.find(board => board.id === selectedBoardKey.value) || null)
+const selectedChart = computed(() => chartStore.charts.find(c => c.id === selectedBoardKey.value) || null)
 
 function createEmptyBoardConfig(): PivotConfig {
   return {
-    filters: [],
-    axes: [],
-    legend: [],
-    values: [],
-    order_by: [],
-    limit: 1000,
-    having: [],
-    grand_total: false,
-    subtotals: false,
+    filters: [], axes: [], legend: [], values: [],
+    order_by: [], limit: 1000, having: [],
+    grand_total: false, subtotals: false,
   }
 }
 
@@ -184,6 +183,55 @@ function closeConfigPanel() {
   showConfigPanel.value = false
   selectedBoardKey.value = null
 }
+
+// ====== 看板管理 ======
+
+async function handleCreateBoard() {
+  const name = `柔性报表 ${boardStore.boards.length + 1}`
+  const created = await boardStore.createBoard(name, '')
+  if (created) {
+    ElMessage.success('柔性报表已创建')
+  } else {
+    ElMessage.warning(boardStore.error || '创建柔性报表失败')
+  }
+}
+
+async function handleRenameBoard(board: Board) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新名称', '重命名柔性报表', {
+      inputValue: board.name,
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputValidator: (val: string) => (val && val.trim().length > 0) || '名称不能为空',
+    })
+    await boardStore.updateBoard(board.id, { name: value.trim() })
+    ElMessage.success('已重命名')
+  } catch { /* cancelled */ }
+}
+
+async function handleDeleteBoard(board: Board) {
+  if (boardStore.boards.length <= 1) {
+    ElMessage.warning('至少保留一个柔性报表')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除柔性报表"${board.name}"及其所有图表吗？`,
+      '确认删除柔性报表',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+
+  const ok = await boardStore.deleteBoard(board.id)
+  if (ok) {
+    closeConfigPanel()
+    ElMessage.success('柔性报表已删除')
+  } else {
+    ElMessage.warning(boardStore.error || '删除柔性报表失败')
+  }
+}
+
+// ====== 配置导入 ======
 
 function openImportConfigDialog() {
   savedReportConfigs.value = loadStoredReportConfigs()
@@ -204,102 +252,55 @@ function formatSavedConfigTime(value: string) {
 
 async function handleImportConfig() {
   const selectedConfig = savedReportConfigs.value.find(item => item.id === selectedImportConfigId.value)
-  if (!selectedConfig) {
-    ElMessage.warning('请选择一条配置')
-    return
-  }
-
-  if (!configPanelRef.value) {
-    ElMessage.warning('配置面板未就绪')
-    return
-  }
-
+  if (!selectedConfig) { ElMessage.warning('请选择一条配置'); return }
+  if (!configPanelRef.value) { ElMessage.warning('配置面板未就绪'); return }
   const importedConfig = clonePivotConfig(selectedConfig.config)
   await configPanelRef.value.applyConfigAndQuery(importedConfig)
-
-  if (selectedBoard.value) {
-    await chartStore.updateChart(selectedBoard.value.id, {
-      title: selectedConfig.name,
-    })
+  if (selectedChart.value) {
+    await chartStore.updateChart(selectedChart.value.id, { title: selectedConfig.name }, boardStore.activeBoardId ?? undefined)
   }
-
   importDialogVisible.value = false
   ElMessage.success(`已导入配置：${selectedConfig.name}`)
 }
 
 async function handleImportJson() {
-  if (!configPanelRef.value) {
-    ElMessage.warning('配置面板未就绪')
-    return
-  }
-
+  if (!configPanelRef.value) { ElMessage.warning('配置面板未就绪'); return }
   const raw = importJsonText.value.trim()
-  if (!raw) {
-    ElMessage.warning('请先粘贴 JSON 内容')
-    return
-  }
-
+  if (!raw) { ElMessage.warning('请先粘贴 JSON 内容'); return }
   let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    ElMessage.error('JSON 解析失败，请检查格式')
-    return
-  }
-
+  try { parsed = JSON.parse(raw) } catch { ElMessage.error('JSON 解析失败'); return }
   try {
     const { config, warnings } = normalizeImportedPivotRequest(parsed)
     await configPanelRef.value.applyConfigAndQuery(config)
     importJsonDialogVisible.value = false
     importJsonText.value = ''
     ElMessage.success('JSON 配置已导入并加载')
-    if (warnings.length > 0) {
-      ElMessage.warning(warnings.join('；'))
-    }
+    if (warnings.length > 0) ElMessage.warning(warnings.join('；'))
   } catch (error: any) {
     ElMessage.error(error?.message || '导入 JSON 失败')
   }
 }
 
 async function handleClearStoredConfigs() {
-  if (savedReportConfigs.value.length === 0) {
-    ElMessage.info('暂无可清空的配置')
-    return
-  }
-
+  if (savedReportConfigs.value.length === 0) { ElMessage.info('暂无可清空的配置'); return }
   try {
-    await ElMessageBox.confirm(
-      '确定要清空当前所有已保存的配置吗？清空后不可恢复。',
-      '确认清空配置',
-      {
-        confirmButtonText: '确认清空',
-        cancelButtonText: '取消',
-        type: 'warning',
-      },
-    )
-  } catch {
-    return
-  }
-
+    await ElMessageBox.confirm('确定要清空当前所有已保存的配置吗？', '确认清空配置',
+      { confirmButtonText: '确认清空', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
   try {
     clearStoredReportConfigs()
     savedReportConfigs.value = []
     selectedImportConfigId.value = ''
     ElMessage.success('已清空当前所有缓存配置')
-  } catch (error: any) {
-    ElMessage.error(error?.message || '清空配置失败')
-  }
+  } catch (error: any) { ElMessage.error(error?.message || '清空配置失败') }
 }
+
+// ====== 透视查询 ======
 
 function toFilterValueArray(value: unknown) {
   if (Array.isArray(value)) return value
   if (value == null || value === '') return []
-  if (typeof value === 'string' && value.includes(',')) {
-    return value
-      .split(',')
-      .map(item => item.trim())
-      .filter(item => item !== '')
-  }
+  if (typeof value === 'string' && value.includes(',')) return value.split(',').map(i => i.trim()).filter(i => i !== '')
   return [value]
 }
 
@@ -317,39 +318,17 @@ function toQueryFilterValue(filter: { filter_type?: string; op: string; value: u
 
 function toBoardPivotRequest(config: PivotConfig) {
   const normalizedOrderBy = config.order_by ?? []
-
   return {
     filters: (config.filters ?? []).map((filter, index) => ({
-      field: filter.field,
-      op: filter.op,
-      value: toQueryFilterValue(filter),
-      select_ts: filter.select_ts ?? '',
-      select_order: filter.select_order ?? index + 1,
-      filter_type: filter.filter_type ?? '',
+      field: filter.field, op: filter.op, value: toQueryFilterValue(filter),
+      select_ts: filter.select_ts ?? '', select_order: filter.select_order ?? index + 1, filter_type: filter.filter_type ?? '',
     })),
-    axes: (config.axes ?? []).map(axis => ({
-      field: axis.field,
-      alias: axis.alias,
-      ...(axis.aggregation ? { aggregation: axis.aggregation } : {}),
-    })),
-    legend: (config.legend ?? []).map(item => ({
-      field: item.field,
-      alias: item.alias,
-    })),
-    values: (config.values ?? []).map(item => ({
-      id: item.id,
-      field: item.field,
-      aggregation: item.aggregation,
-      alias: item.alias,
-      ...(item.show_as ? { show_as: item.show_as } : {}),
-    })),
+    axes: (config.axes ?? []).map(axis => ({ field: axis.field, alias: axis.alias, ...(axis.aggregation ? { aggregation: axis.aggregation } : {}) })),
+    legend: (config.legend ?? []).map(item => ({ field: item.field, alias: item.alias })),
+    values: (config.values ?? []).map(item => ({ id: item.id, field: item.field, aggregation: item.aggregation, alias: item.alias, ...(item.show_as ? { show_as: item.show_as } : {}) })),
     row_filters: config.row_filters ?? [],
     col_filters: config.col_filters ?? [],
-    ...(normalizedOrderBy.length > 0
-      ? {
-          order_by: normalizedOrderBy.map(item => ({ field: item.field, direction: item.direction })),
-        }
-      : {}),
+    ...(normalizedOrderBy.length > 0 ? { order_by: normalizedOrderBy.map(item => ({ field: item.field, direction: item.direction })) } : {}),
     ...(config.pagination ? { pagination: { ...config.pagination } } : {}),
     limit: config.limit ?? 1000,
     having: config.having ?? [],
@@ -363,11 +342,19 @@ function toBoardPivotRequest(config: PivotConfig) {
 }
 
 async function pivotApi(config: any) {
-  if (!selectedBoard.value) {
-    ElMessage.warning('请先选择左侧看板，再执行查询')
-    return
+  const currentBoard = boardStore.activeBoard
+  if (!currentBoard) { ElMessage.warning('请先选择一个柔性报表'); return }
+  
+  // 如果还没有选中的图表（从空白占位进入），先创建空图表
+  if (!selectedChart.value) {
+    const created = await chartStore.saveChart(
+      '新图表', config, '', config?.chart_type || 'bar', null, null,
+      currentBoard.id,
+    )
+    if (!created) { ElMessage.warning(chartStore.error || '创建图表失败'); return }
+    selectedBoardKey.value = created.id
   }
-
+  
   try {
     const requestConfig = toBoardPivotRequest(config as PivotConfig)
     const resp = await fetch('http://127.0.0.1:8080/api2/pivot/query', {
@@ -375,56 +362,41 @@ async function pivotApi(config: any) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestConfig),
     })
-
-    if (!resp.ok) {
-      const err = await resp.json()
-      throw new Error(err.detail || '查询失败')
-    }
-
+    if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '查询失败') }
     const result = await resp.json()
-    await chartStore.updateChart(selectedBoard.value.id, {
-      pivot_config: config,
-      chart_type: config?.chart_type || 'bar',
-      vega_spec: null,
-      data: result.data || [],
-    })
-  } catch (e: any) {
-    ElMessage.error(e.message || '查询失败')
-  }
+    await chartStore.updateChart(selectedChart.value!.id, {
+      pivot_config: config, chart_type: config?.chart_type || 'bar', vega_spec: null, data: result.data || [],
+    }, currentBoard.id)
+  } catch (e: any) { ElMessage.error(e.message || '查询失败') }
 }
 
+// ====== 保存 AI 结果到当前看板 ======
+
 async function handleSaveToBoard(chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>) {
+  const currentBoard = boardStore.activeBoard
+  if (!currentBoard) { ElMessage.warning('请先选择一个柔性报表'); return }
+
   const saved = await chartStore.saveChart(
-    chart.title,
-    chart.pivot_config as PivotConfig,
-    chart.description || '',
-    chart.chart_type,
-    chart.vega_spec || null,
-    chart.data,
+    chart.title, chart.pivot_config as PivotConfig, chart.description || '',
+    chart.chart_type, chart.vega_spec || null, chart.data,
+    currentBoard.id,
   )
   if (!saved) {
-    ElMessage.warning(chartStore.error || `看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
+    ElMessage.warning(chartStore.error || `每个柔性报表最多只能保存 ${MAX_BOARD_CHARTS} 个图表`)
     return
   }
   showAiDialog.value = false
 }
 
 async function createEmptyBoard(preferredSlot?: number) {
+  const currentBoard = boardStore.activeBoard
+  if (!currentBoard) { ElMessage.warning('请先选择一个柔性报表'); return }
+
   const created = await chartStore.saveChart(
-    '空白看板',
-    createEmptyBoardConfig(),
-    '',
-    'bar',
-    null,
-    null,
-    preferredSlot,
+    '空白报表', createEmptyBoardConfig(), '', 'bar', null, null,
+    currentBoard.id, preferredSlot,
   )
-
-  if (!created) {
-    ElMessage.warning(chartStore.error || '创建看板失败')
-    return
-  }
-
+  if (!created) { ElMessage.warning(chartStore.error || '创建柔性报表失败'); return }
   selectedBoardKey.value = created.id
   showConfigPanel.value = true
   await syncConfigPanel(created)
@@ -433,39 +405,31 @@ async function createEmptyBoard(preferredSlot?: number) {
 async function syncConfigPanel(chart: SavedChart | null) {
   if (!showConfigPanel.value) return
   await nextTick()
-
   if (!configPanelRef.value) return
-
-  if (!chart) {
-    await configPanelRef.value.resetConfig()
-    return
-  }
-
-  if (chart.pivot_config) {
-    await configPanelRef.value.setDefaultValues(chart.pivot_config)
-    return
-  }
-
+  if (!chart) { await configPanelRef.value.resetConfig(); return }
+  if (chart.pivot_config) { await configPanelRef.value.setDefaultValues(chart.pivot_config); return }
   await configPanelRef.value.resetConfig()
 }
 
+async function openEmptyConfig() {
+  await nextTick()
+  if (configPanelRef.value?.resetConfig) {
+    configPanelRef.value.resetConfig()
+  }
+}
 async function handleToggleConfig(chart: ToggleBoardCard) {
   if (chartStore.loading) return
-
-  if (chart.isPlaceholder) {
-    await createEmptyBoard(chart.slotIndex)
-    return
+  if (chart.isPlaceholder) { 
+    // 双击空白占位 → 打开空配置面板，加载数据时才创建
+    selectedBoardKey.value = chart.slotIndex ?? chart.id
+    showConfigPanel.value = true
+    await openEmptyConfig()
+    return 
   }
-
   if (typeof chart.id !== 'number') return
   const nextKey = chart.id
   const isSameCard = selectedBoardKey.value === nextKey
-
-  if (isSameCard && showConfigPanel.value) {
-    closeConfigPanel()
-    return
-  }
-
+  if (isSameCard && showConfigPanel.value) { closeConfigPanel(); return }
   selectedBoardKey.value = nextKey
   showConfigPanel.value = true
   await syncConfigPanel(chart as SavedChart)
@@ -477,111 +441,72 @@ watch(showConfigPanel, async (visible) => {
   await syncConfigPanel(current)
 })
 
+// 切换报表时关闭配置面板
+watch(() => boardStore.activeBoardId, () => {
+  closeConfigPanel()
+})
+
 async function clearAllCharts() {
   const chartsToDelete = [...chartStore.charts]
-
   closeConfigPanel()
-
   for (const chart of chartsToDelete) {
     const deleted = await chartStore.deleteChart(chart.id)
-    if (!deleted) {
-      ElMessage.error(chartStore.error || `删除看板“${chart.title || chart.id}”失败`)
-      return false
-    }
+    if (!deleted) { ElMessage.error(chartStore.error || `删除图表失败`); return false }
   }
-
-  await chartStore.fetchCharts()
+  if (boardStore.activeBoardId) await chartStore.fetchCharts(boardStore.activeBoardId)
   return true
 }
 
 async function handleClearBoardRequest() {
-  await chartStore.fetchCharts()
-
-  if (chartStore.charts.length === 0) {
-    ElMessage.info('当前没有可清空的看板')
-    return
-  }
-
+  if (!boardStore.activeBoardId) { ElMessage.info('请先选择一个柔性报表'); return }
+  await chartStore.fetchCharts(boardStore.activeBoardId)
+  if (chartStore.charts.length === 0) { ElMessage.info('当前报表暂无图表'); return }
   try {
-    await ElMessageBox.confirm(
-      '确定要清空当前所有看板吗？清空后不可恢复。',
-      '确认清空看板',
-      {
-        confirmButtonText: '确认清空',
-        cancelButtonText: '取消',
-        type: 'warning',
-      },
-    )
-  } catch {
-    return
-  }
-
+    await ElMessageBox.confirm('确定要清空当前报表所有图表吗？', '确认清空',
+      { confirmButtonText: '确认清空', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
   const cleared = await clearAllCharts()
   if (!cleared) return
-
-  ElMessage.success('已清空当前所有看板')
+  ElMessage.success('已清空当前报表所有图表')
 }
 
 async function handleMockDataRequest() {
-  await chartStore.fetchCharts()
-
+  const currentBoard = boardStore.activeBoard
+  if (!currentBoard) { ElMessage.warning('请先选择一个柔性报表'); return }
+  await chartStore.fetchCharts(currentBoard.id)
   if (chartStore.charts.length > 0) {
-    try {
-      await ElMessageBox.confirm(
-        '生成模拟数据会先删除当前所有看板和报表数据，是否继续？',
-        '确认清空现有报表',
-        {
-          confirmButtonText: '确认删除并生成',
-          cancelButtonText: '取消',
-          type: 'warning',
-        },
-      )
-    } catch {
-      return
-    }
-
+    try { await ElMessageBox.confirm('生成模拟数据会先删除当前报表所有图表，是否继续？', '确认清空',
+      { confirmButtonText: '确认删除并生成', cancelButtonText: '取消', type: 'warning' }) }
+    catch { return }
     const cleared = await clearAllCharts()
     if (!cleared) return
   }
-
   const mockCharts = createMockBoardCharts()
   let createdCount = 0
   let firstCreatedId: number | null = null
-
   for (const mockChart of mockCharts) {
     const created = await chartStore.saveChart(
-      mockChart.title,
-      mockChart.pivotConfig,
-      mockChart.description,
-      mockChart.chartType,
-      null,
-      mockChart.data,
+      mockChart.title, mockChart.pivotConfig, mockChart.description, mockChart.chartType, null, mockChart.data,
+      currentBoard.id,
     )
-
-    if (!created) {
-      ElMessage.warning(chartStore.error || '模拟数据生成失败')
-      break
-    }
-
+    if (!created) { ElMessage.warning(chartStore.error || '模拟数据生成失败'); break }
     createdCount += 1
-    if (firstCreatedId == null) {
-      firstCreatedId = created.id
-    }
+    if (firstCreatedId == null) firstCreatedId = created.id
   }
-
   if (createdCount === mockCharts.length) {
     selectedBoardKey.value = firstCreatedId
     showConfigPanel.value = false
     ElMessage.success('已生成 6 种模拟图表数据')
     return
   }
-
-  if (createdCount > 0) {
-    ElMessage.warning(`已生成 ${createdCount} 张模拟图表，剩余图表未完成`)
-  }
+  if (createdCount > 0) ElMessage.warning(`已生成 ${createdCount} 张模拟图表，剩余图表未完成`)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await boardStore.fetchBoards()
+  if (boardStore.activeBoardId) {
+    await chartStore.fetchCharts(boardStore.activeBoardId)
+  }
   window.addEventListener('board:mock-data', handleMockDataRequest)
   window.addEventListener('board:clear-all', handleClearBoardRequest)
 })
@@ -598,60 +523,65 @@ onBeforeUnmount(() => {
   overflow: hidden;
   padding: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .board-workspace {
-  height: 100%;
+  flex: 1;
   display: flex;
+  flex-direction: column;
   position: relative;
   overflow: hidden;
 }
 
-.board-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: all 0.24s ease;
-}
 
-.board-list-wrap {
+/* 看板主区域 */
+.board-main {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-.board-sidebar {
+.board-list-wrap {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 配置侧边栏 */
+.config-sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
   width: 0;
-  flex-shrink: 0;
   overflow: hidden;
   background: #f5f7fa;
   border-left: 1px solid transparent;
   transition: width 0.24s ease, border-color 0.24s ease;
+  z-index: 10;
 }
 
-.board-sidebar.is-open {
+.config-sidebar.is-open {
   width: 368px;
   border-left-color: #e4e7ed;
 }
 
-.board-sidebar-inner {
+.config-sidebar-inner {
   width: 368px;
   height: 100%;
-  padding: 10px 10px 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.board-sidebar-content {
+.config-sidebar-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.board-sidebar-footer {
+.config-sidebar-footer {
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
@@ -669,98 +599,25 @@ onBeforeUnmount(() => {
   transition: right 0.24s ease;
 }
 
-.config-import-empty {
-  padding: 28px 0;
-  text-align: center;
-  color: #909399;
-  font-size: 14px;
-}
-
-.config-import-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-
+/* 配置导入 */
+.config-import-empty { padding: 28px 0; text-align: center; color: #909399; font-size: 14px; }
+.config-import-list { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; }
 .config-import-item {
-  appearance: none;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid #dcdfe6;
-  border-radius: 10px;
-  background: #fff;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  appearance: none; width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 14px; border: 1px solid #dcdfe6; border-radius: 10px; background: #fff;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; transition: all 0.2s;
 }
-
-.config-import-item:hover {
-  border-color: #409eff;
-}
-
-.config-import-item.is-active {
-  border-color: #409eff;
-  background: #ecf5ff;
-  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.16);
-}
-
-.config-import-item-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.config-import-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.config-import-time {
-  font-size: 12px;
-  color: #909399;
-}
-
-.config-import-json-tip {
-  margin-bottom: 12px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #606266;
-}
-
-@media (max-width: 1100px) {
-}
+.config-import-item:hover { border-color: #409eff; }
+.config-import-item.is-active { border-color: #409eff; background: #ecf5ff; box-shadow: 0 0 0 1px rgba(64,158,255,0.16); }
+.config-import-item-main { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.config-import-name { font-size: 14px; font-weight: 600; color: #303133; }
+.config-import-time { font-size: 12px; color: #909399; }
+.config-import-json-tip { margin-bottom: 12px; font-size: 13px; line-height: 1.6; color: #606266; }
 
 @media (max-width: 960px) {
-  .board-sidebar {
-    position: absolute;
-    top: 0;
-    right: 0;
-    height: 100%;
-    z-index: 15;
-    box-shadow: -12px 0 24px rgba(15, 23, 42, 0.08);
-  }
-
-  .board-sidebar.is-open {
-    width: min(368px, calc(100vw - 48px));
-  }
-
-  .board-sidebar-inner {
-    width: min(368px, calc(100vw - 48px));
-  }
-
-  .board-ai-button {
-    right: 24px !important;
-  }
+  .config-sidebar { box-shadow: -12px 0 24px rgba(15,23,42,0.08); }
+  .config-sidebar.is-open { width: min(368px, calc(100vw - 48px)); }
+  .config-sidebar-inner { width: min(368px, calc(100vw - 48px)); }
+  .board-ai-button { right: 24px !important; }
 }
 </style>

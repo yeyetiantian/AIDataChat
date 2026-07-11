@@ -1,0 +1,17 @@
+.el-dialog.ai-full-dialog {
+  width: 50vw;
+  min-width: 600px;
+}
+.ai-full-dialog > .el-dialog__body {
+  padding: 0 !important;
+  height: 82vh !important;
+  overflow: hidden;
+}
+
+.ai-full-dialog > .el-dialog__header {
+  display: none;
+}
+
+.ai-full-dialog.is-fullscreen .el-dialog__body {
+  height: 100vh;
+}

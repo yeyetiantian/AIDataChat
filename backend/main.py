@@ -4,7 +4,7 @@
 1. CORS 配置（允许前端跨域访问）
 2. 路由注册
 
-大宽表初始化请手动执行: python -m core.db_initializer
+原始表查询（6 表 LEFT JOIN），无需初始化宽表。
 或通过 API: POST /api/admin/refresh_wide_detail
 """
 
@@ -35,6 +35,8 @@ logger = logging.getLogger("main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    from core.chat_db import init_db
+    init_db()
     logger.info("=" * 60)
     logger.info("企业级数据透视分析系统 启动中...")
     logger.info("环境: %s", os.getenv("ENV", "development"))
@@ -53,25 +55,29 @@ app = FastAPI(
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_origins="*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # 注册路由
-from routers.api_pivot import router as pivot_router
 from routers.api_chat import router as chat_router
 from routers.api_admin import router as admin_router
 from routers.api_charts import router as charts_router
 from routers.api_recommend import router as recommend_router
-
-app.include_router(pivot_router)
+from routers.api_auth import router as auth_router
+from routers.api_sessions import router as sessions_router
+from routers.api_boards import router as boards_router
+from routers.api_monitor import router as monitor_router
 app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(charts_router)
 app.include_router(recommend_router)
-
+app.include_router(auth_router)
+app.include_router(sessions_router)
+app.include_router(boards_router)
+app.include_router(monitor_router)
 # 生产环境：挂载前端静态文件
 if getattr(sys, "frozen", False):
     _dist_dir = os.path.join(os.path.dirname(sys.executable), "dist")
@@ -92,12 +98,12 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "api": {
-            "pivot": "POST /api/pivot — 报表查询",
             "chat": "POST /api/chat — AI 对话分析",
             "charts": "GET/POST /api/charts — 看板管理",
+            "boards": "GET/POST /api/boards — 多看板管理",
             "recommend": "POST /api/recommend-chart — 图表类型推荐",
             "admin": {
-                "refresh": "POST /api/admin/refresh_wide_detail — 重建 WIDE_DETAIL 明细宽表",
+                "refresh": "POST /api/admin/refresh — 重建",
                 "health": "GET /api/admin/health — 健康检查",
             },
         },
@@ -106,4 +112,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

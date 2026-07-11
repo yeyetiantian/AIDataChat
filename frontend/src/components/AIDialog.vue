@@ -1,588 +1,857 @@
 <template>
-  <div class="ai-dialog">
-    <div class="dialog-messages" ref="messagesRef">
-      <div v-if="chatStore.messages.length === 0" class="empty-state">
-        <el-icon :size="48" color="#c0c4cc"><ChatLineSquare /></el-icon>
-        <p>输入分析需求，AI 将自动生成图表</p>
-        <div class="suggestions">
-          <el-tag
-            v-for="s in suggestions" :key="s"
-            size="small"
-            class="suggestion-tag"
-            @click="chatStore.sendMessage(s)"
+  <div class="ai-dialog" :class="{ 'fullscreen-mode': isFullscreen }">
+    <!-- 侧边栏：历史记录 -->
+    <aside class="dialog-sidebar" :class="{ 'sidebar-visible': sidebarOpen }">
+      <div class="sidebar-inner">
+        <div class="sidebar-header">
+          <button class="sidebar-new-btn" @click="chatStore.newSession()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>新建对话</span>
+          </button>
+        </div>
+        <div class="sidebar-list">
+          <div v-if="chatStore.sessions.length === 0" class="sidebar-empty">暂无历史</div>
+          <div
+            v-for="s in chatStore.sessions"
+            :key="s.id"
+            class="sidebar-item"
+            :class="{ active: s.id === chatStore.activeSessionId }"
+            @click="handleSwitch(s.id)"
           >
-            {{ s }}
-          </el-tag>
+            <svg class="sidebar-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            <div class="sidebar-item-text">
+              <span class="sidebar-item-title">{{ s.title }}</span>
+              <span class="sidebar-item-time">{{ fmtTime(s.updatedAt) }}</span>
+            </div>
+            <button class="sidebar-item-del" @click.stop="chatStore.deleteSession(s.id)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
         </div>
       </div>
+    </aside>
 
-      <div v-for="(msg, i) in chatStore.messages" :key="i" class="message" :class="msg.role">
-        <div class="message-content">
-          <div class="message-text">{{ msg.content }}</div>
 
-          <!-- 图表显示 -->
-          <div v-if="msg.charts && msg.charts.length" class="message-charts">
-            <div v-for="(chart, ci) in msg.charts" :key="getChartKey(i, ci)" class="chart-card">
-              <div class="card-header">
-                <span class="card-title">{{ chart.title }}</span>
-                <div class="card-actions">
-                  <el-tooltip content="保存图片" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="exportChartPng(`chat_${ci}`, chart.title)">
-                      <el-icon :size="16"><Picture /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip content="查看数据" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openDataDialog(chart)">
-                      <el-icon :size="16"><View /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip content="查看配置" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openConfigDialog(chart)">
-                      <el-icon :size="16"><Operation /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip content="查看SQL" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openSqlDialog(chart)">
-                      <el-icon :size="16"><Orange /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip content="全屏" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="toggleChartFullscreen(`chat_${ci}`)">
-                      <el-icon :size="16"><FullScreen /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip content="保存到看板" placement="top">
-                    <el-button text circle class="action-btn action-btn-primary" @click="openSaveDialog(chart, ci)">
-                      <el-icon :size="16"><PieChart /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                </div>
-              </div>
-              <div class="card-chart">
-                <div v-if="chart.error" class="chart-error">
-                  <el-icon :size="24" color="#e6a23c"><WarningFilled /></el-icon>
-                  <span>图表生成失败，请尝试重新描述分析需求</span>
-                </div>
-                <VegaLiteRenderer
-                  v-else
-                  :ref="(el) => setRendererRef(`chat_${ci}`, el)"
-                  :data="chart.data"
-                  :config="chart.pivot_config"
-                  :chart-type="chart.chart_type"
-                  :hide-toolbar="true"
-                  :hide-title="true"
-                />
-              </div>
-            </div>
-            <div v-if="msg.charts.length > 1" class="batch-board-save-bar">
-              <el-button type="primary" size="small" class="batch-board-save-btn" :loading="isBatchSaving(i)" @click="saveMessageChartsToBoard(i, msg.charts)">
-                <el-icon><PieChart /></el-icon>
-                <span>批量保存到看板</span>
-              </el-button>
-            </div>
-          </div>
-          <el-tag type="primary" v-for="sg in msg.suggestions" :key="sg" class="suggestion-tag" @click="onSuggest(sg)">
-            {{ sg }}
-          </el-tag>
+    <!-- 主面板 -->
+    <div class="dialog-main">
+      <!-- 顶栏 -->
+      <div class="dialog-topbar">
+        <div class="topbar-left">
+          <button class="topbar-btn" v-show="isFullscreen" @click="sidebarOpen=!sidebarOpen" title="菜单">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="dialog-title">AI 数据分析</span>
+        </div>
+        <div class="topbar-right">
+          <button class="topbar-btn" v-show="!isFullscreen" @click="historyOpen=!historyOpen" title="历史记录">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </button>
+          <button class="topbar-btn" v-show="!isFullscreen" @click="chatStore.newSession()" title="新建对话">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          </button>
+          <button class="topbar-btn" @click="toggleFullscreen" :title="isFullscreen?'退出全屏':'全屏'">
+            <svg v-if="!isFullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>
+          </button>
+          <button class="topbar-btn" @click="showSettings=true" title="设置">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          </button>
+          <button class="topbar-btn" @click="$emit('close')" title="关闭">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
       </div>
-      <div v-if="chatStore.loading" class="message assistant">
-        <div class="message-content">
-          <div class="typing-dots">
-            <span>.</span><span>.</span><span>.</span>
+        <!-- 历史下拉 -->
+        <div class="history-dropdown-wrapper">
+          <div v-if="historyOpen" class="history-dropdown-overlay" @click="historyOpen=false" />
+          <div class="history-dropdown" :class="{ 'is-open': historyOpen }">
+
+            <div class="hd-list">
+              <div v-for="s in chatStore.sessions" :key="s.id" class="hd-item" :class="{ active: s.id===chatStore.activeSessionId }" @click="chatStore.switchSession(s.id); historyOpen=false">
+                <svg class="hd-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                <span class="hd-title">{{ s.title }}</span>
+                <button class="hd-del" @click.stop="chatStore.deleteSession(s.id)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+              </div>
+            </div>
           </div>
+        </div>
+
+      <!-- 消息区 -->
+      <div class="dialog-messages" ref="msgsRef">
+        <div v-if="chatStore.messages.length===0" class="empty-state">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          <div class="empty-title">{{ chatStore.mode==='chart' ? '数据分析助手' : '规则推荐助手' }}</div>
+          <div class="empty-desc">{{ chatStore.mode==='chart' ? '描述分析需求，AI 自动生成图表' : '描述需求，AI 推荐合适的规则函数' }}</div>
+          <div class="empty-chips">
+            <button v-for="s in emptyTips" :key="s" class="empty-chip" @click="sendText(s)">{{ s }}</button>
+          </div>
+        </div>
+
+        <div v-for="(msg,i) in chatStore.messages" :key="i" class="msg-row" :class="msg.role">
+          <div class="msg-avatar">
+            <div class="avt" :class="msg.role==='user'?'avt-user':'avt-ai'">
+              <svg v-if="msg.role==='user'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 014 4v2a4 4 0 01-8 0V6a4 4 0 014-4z"/><path d="M5.5 14h13"/><path d="M12 14v8"/></svg>
+            </div>
+          </div>
+          <div class="msg-bubble">
+            <div class="msg-text">{{ msg.content }}</div>
+            <div v-if="msg.charts?.length" class="msg-charts">
+              <div v-for="(ch,ci) in msg.charts" :key="ci" class="chart-card">
+                <div class="chart-card-hd">
+                  <span class="chart-card-title">{{ ch.title }}</span>
+                  <div class="chart-card-actions">
+                    <button title="查看数据" @click="openData(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></button>
+                    <button title="查看配置" @click="openCfg(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
+                    <button title="查看SQL" @click="openSql(ch)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
+                    <button title="保存到看板" @click="openSave(ch,ci)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></button>
+                  </div>
+                </div>
+                <div class="chart-card-body">
+                  <div v-if="ch.error" class="chart-err">{{ ch.error }}</div>
+                  <VegaLiteRenderer v-else :ref="el=>setRR(`c_${i}_${ci}`,el)" :data="ch.data" :config="ch.pivot_config" :chart-type="ch.chart_type" :hide-toolbar="true" :hide-title="true" />
+                </div>
+              </div>
+            </div>
+            <div v-if="msg.suggestions?.length" class="msg-sugs">
+              <button v-for="sg in msg.suggestions" :key="sg" class="sug-chip" @click="sendText(sg)">{{ sg }}</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="chatStore.loading" class="msg-row assistant">
+          <div class="msg-avatar"><div class="avt avt-ai"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z"/></svg></div></div>
+          <div class="msg-bubble"><span class="typing">···</span></div>
+        </div>
+        <div ref="scrollAnchor" />
+      </div>
+
+      <!-- 输入区 -->
+      <div class="dialog-input">
+        <div class="input-wrap">
+          <textarea ref="taRef" v-model="inputText" class="input-ta" :placeholder="chatStore.mode==='chart'?'描述分析需求，如：按车型统计报警次数':'描述需求，如：有哪些速度相关规则'" rows="1" @keydown.enter.prevent="handleSend" @input="autoSize" />
+          <button class="send-btn" :disabled="!inputText.trim()||chatStore.loading" @click="handleSend">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
         </div>
       </div>
     </div>
 
-    <div class="dialog-input">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="2"
-        placeholder="输入分析需求，如：按车型统计各规则的触发次数"
-        @keydown.enter.prevent="handleSend"
-      />
-      <el-button type="primary" :loading="chatStore.loading" @click="handleSend" class="send-btn">
-        <el-icon><Promotion /></el-icon>
-      </el-button>
-    </div>
-
-    <ChartDataDialog
-      v-model:visible="showDataDialog"
-      :data="selectedChart?.data"
-      :title="selectedChart ? `${selectedChart.title || '图表'} - 数据` : '查看数据'"
-    />
-    <ChartSqlDialog
-      v-model:visible="showConfigDialog"
-      :content="configContent"
-      title="查看配置"
-      lang="json"
-    />
-    <ChartSqlDialog
-      v-model:visible="showSqlDialog"
-      :content="selectedChart?.sql"
-      :title="selectedChart ? `${selectedChart.title || '图表'} - SQL` : '查看SQL'"
-      lang="sql"
-    />
-    <SaveToBoardDialog
-      v-model:visible="showSaveDialog"
-      :chart="selectedSaveChart"
-      :index="selectedSaveIndex"
-      @save="handleSaveToBoard"
-    />
+    <!-- 弹窗：数据 -->
+    <el-dialog v-model="dlgData" title="查看数据" width="80%" top="5vh" destroy-on-close>
+      <el-table v-if="selChart?.data" :data="selChart.data" border stripe size="small" max-height="500" style="width:100%">
+        <el-table-column v-for="col in dataCols" :key="col" :prop="col" :label="col" min-width="100" />
+      </el-table>
+    </el-dialog>
+    <!-- 弹窗：配置 -->
+    <el-dialog v-model="dlgCfg" title="查看配置" width="60%" top="5vh" destroy-on-close>
+      <pre class="code-block">{{ cfgContent }}</pre>
+    </el-dialog>
+    <!-- 弹窗：SQL -->
+    <el-dialog v-model="dlgSql" title="查看 SQL" width="70%" top="5vh" destroy-on-close>
+      <pre class="code-block sql">{{ selChart?.sql||'-- 无 SQL' }}</pre>
+    </el-dialog>
+    <!-- 弹窗：保存到看板 -->
+    <el-dialog v-model="dlgSave" title="保存到看板" width="400px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="图表名称"><el-input v-model="saveTitle" placeholder="输入图表名称" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dlgSave=false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+      </template>
+    </el-dialog>
+    <!-- 弹窗：设置 -->
+    <el-dialog v-model="showSettings" title="设置" width="500px" destroy-on-close>
+      <el-tabs v-model="settingsTab">
+        <el-tab-pane label="用户配置" name="cfg">
+          <p style="font-size:13px;color:#6b7280;margin-bottom:12px;">编辑 JSON 配置，保存后生效。</p>
+          <el-input v-model="editCfgText" type="textarea" :rows="10" resize="vertical" placeholder="{ }" />
+          <div v-if="cfgErr" style="color:#ef4444;font-size:13px;margin-top:8px;">{{ cfgErr }}</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+            <el-button @click="showSettings=false">取消</el-button>
+            <el-button type="primary" @click="handleSaveCfg">保存</el-button>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="关于" name="about">
+          <p style="margin:0;line-height:2;color:#374151;"><strong>AI 数据分析助手</strong><br>版本：1.0.0<br>基于 LangGraph + GPT-4o<br>支持报表推荐与规则推荐</p>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatLineSquare, FullScreen, Picture, PieChart, Promotion, View, WarningFilled, Operation, Orange } from '@element-plus/icons-vue'
-import VegaLiteRenderer from './VegaLiteRenderer.vue'
-import ChartDataDialog from './ChartDataDialog.vue'
-import ChartSqlDialog from './ChartSqlDialog.vue'
-import SaveToBoardDialog from './SaveToBoardDialog.vue'
 import { useChatStore } from '@/stores/useChatStore'
-import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
+import { useChartStore, MAX_BOARD_CHARTS } from '@/stores/useChartStore'
+import { useBoardStore } from '@/stores/useBoardStore'
 import type { PivotConfig } from '@/types'
+import VegaLiteRenderer from './VegaLiteRenderer.vue'
 
 const chatStore = useChatStore()
 const chartStore = useChartStore()
+const boardStore = useBoardStore()
 
-const emit = defineEmits<{
-  save: [chart: Omit<SavedChart, 'id' | 'created_at' | 'updated_at'>]
-  close: []
-}>()
+defineEmits<{ save: [chart: any]; close: [] }>()
 
-type ChartRendererHandle = {
-  openDataDialog: () => void
-  toggleFullscreen: () => void
-  exportPng: (fileName?: string) => Promise<void>
-  exportSvg: (fileName?: string) => Promise<void>
+const sidebarOpen = ref(false)
+const historyOpen = ref(false)
+const isFullscreen = ref(false)
+const inputText = ref('')
+const msgsRef = ref<HTMLElement|null>(null)
+const taRef = ref<HTMLTextAreaElement|null>(null)
+const scrollAnchor = ref<HTMLElement|null>(null)
+
+const dlgData = ref(false)
+const dlgCfg = ref(false)
+const dlgSql = ref(false)
+const dlgSave = ref(false)
+const showSettings = ref(false)
+const settingsTab = ref('cfg')
+const editCfgText = ref('')
+const cfgErr = ref('')
+const selChart = ref<any>(null)
+const saveTitle = ref('')
+const saving = ref(false)
+const rendererRefs = ref<Record<string,any>>({})
+
+const dataCols = computed(() => selChart.value?.data?.length ? Object.keys(selChart.value.data[0]) : [])
+const cfgContent = computed(() => selChart.value?.pivot_config ? JSON.stringify(selChart.value.pivot_config, null, 2) : '-- 无配置')
+
+const emptyTips = computed(() => chatStore.mode==='chart'
+  ? ['各车型触发次数分布','按周统计报警趋势','各规则类型占比']
+  : ['速度规则有哪些','推荐驾驶行为规则','时间类规则说明']
+)
+
+function setRR(k:string, inst:any) {
+  if (inst && typeof inst.exportPng==='function') rendererRefs.value[k]=inst
 }
-
-type ChatChart = {
-  title?: string
-  error?: string
-  pivot_config?: PivotConfig | null
-  chart_type?: string
-  vega_spec?: Record<string, any> | null
-  data?: Record<string, any>[] | null
-  sql?: string | null
+function autoSize() {
+  const el=taRef.value; if(!el) return
+  el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,200)+'px'
 }
-
-const input = ref('')
-const messagesRef = ref<HTMLElement | null>(null)
-const rendererRefs = ref<Record<string, ChartRendererHandle | null>>({})
-const batchSaving = ref<Record<string, boolean>>({})
-
-// 弹窗状态
-const showSaveDialog = ref(false)
-const showDataDialog = ref(false)
-const showConfigDialog = ref(false)
-const showSqlDialog = ref(false)
-const selectedChart = ref<ChatChart | null>(null)
-const selectedSaveChart = ref<ChatChart | null>(null)
-const selectedSaveIndex = ref(0)
-
-const configContent = computed(() => {
-  if (!selectedChart.value?.pivot_config) return '-- 无配置'
-  return JSON.stringify(selectedChart.value.pivot_config, null, 2)
-})
-
-const suggestions = [
-  '各车辆触发次数占比',
-  '按周统计报警趋势',
-  '各任务下规则执行TOP10',
-]
-
 function handleSend() {
-  const msg = input.value.trim()
-  if (!msg || chatStore.loading) return
-  input.value = ''
-  chatStore.sendMessage(msg)
+  const m=inputText.value.trim(); if(!m||chatStore.loading) return
+  inputText.value=''
+  if(taRef.value) taRef.value.style.height='auto'
+  chatStore.sendMessage(m)
+  nextTick(()=>scrollToBottom())
+}
+function sendText(t:string) {
+  if(chatStore.loading) return
+  inputText.value=t; handleSend()
+}
+function handleSwitch(id:string) {
+  chatStore.switchSession(id)
+  sidebarOpen.value = false
+  nextTick(()=>scrollToBottom())
 }
 
-function getMessageKey(messageIndex: number) {
-  return `message-${messageIndex}`
+
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
 }
 
-function getChartKey(messageIndex: number, chartIndex: number) {
-  return `${getMessageKey(messageIndex)}-chart-${chartIndex}`
+function scrollToBottom() {
+  nextTick(()=>scrollAnchor.value?.scrollIntoView({behavior:'smooth'}))
 }
 
-function isBatchSaving(messageIndex: number) {
-  return !!batchSaving.value[getMessageKey(messageIndex)]
-}
+function openData(ch:any) { selChart.value=ch; dlgData.value=true }
+function openCfg(ch:any) { selChart.value=ch; dlgCfg.value=true }
+function openSql(ch:any) { selChart.value=ch; dlgSql.value=true }
+function openSave(ch:any, _idx?:number) { selChart.value=ch; saveTitle.value=ch.title||''; dlgSave.value=true }
 
-function setRendererRef(id: string, instance: any) {
-  if (
-    instance &&
-    typeof instance.openDataDialog === 'function' &&
-    typeof instance.toggleFullscreen === 'function' &&
-    typeof instance.exportPng === 'function' &&
-    typeof instance.exportSvg === 'function'
-  ) {
-    rendererRefs.value[id] = instance as ChartRendererHandle
-    return
-  }
-  rendererRefs.value[id] = null
-}
-
-function openDataDialog(chart: ChatChart) {
-  selectedChart.value = chart
-  showDataDialog.value = true
-}
-
-function openConfigDialog(chart: ChatChart) {
-  selectedChart.value = chart
-  showConfigDialog.value = true
-}
-
-function openSqlDialog(chart: ChatChart) {
-  selectedChart.value = chart
-  showSqlDialog.value = true
-}
-
-function openSaveDialog(chart: ChatChart, index: number) {
-  selectedSaveChart.value = chart
-  selectedSaveIndex.value = index
-  showSaveDialog.value = true
-}
-
-function handleSaveToBoard(payload: {
-  title: string
-  description: string
-  pivot_config: PivotConfig
-  chart_type: string
-  vega_spec: any
-  data: any
-}) {
-  emit('save', payload)
-  showSaveDialog.value = false
-}
-
-function exportChartPng(id: string, title: string) {
-  void rendererRefs.value[id]?.exportPng(`${title || 'chart'}.png`)
-}
-
-function toggleChartFullscreen(id: string) {
-  rendererRefs.value[id]?.toggleFullscreen()
-}
-
-async function saveMessageChartsToBoard(messageIndex: number, charts: ChatChart[]) {
-  const messageKey = getMessageKey(messageIndex)
-  if (batchSaving.value[messageKey]) return
-
-  const savableCharts = charts.filter(chart => !chart?.error && chart?.pivot_config)
-
-  if (!savableCharts.length) {
-    ElMessage.warning('当前没有可保存到看板的图表')
-    return
-  }
-
-  batchSaving.value[messageKey] = true
-
+async function handleSave() {
+  if(!selChart.value||!saveTitle.value.trim()) return
+  saving.value=true
   try {
-    await chartStore.fetchCharts()
-
-    if (chartStore.error) {
-      ElMessage.warning(chartStore.error || '加载看板失败')
-      return
-    }
-
-    const remainingSlots = Math.max(MAX_BOARD_CHARTS - chartStore.charts.length, 0)
-    if (savableCharts.length > remainingSlots) {
-      ElMessage.warning(`看板剩余 ${remainingSlots} 个位置，无法批量保存 ${savableCharts.length} 个图表`)
-      return
-    }
-
-    let savedCount = 0
-
-    for (const [index, chart] of savableCharts.entries()) {
-      const saved = await chartStore.saveChart(
-        (chart.title || `图表 ${index + 1}`).trim() || `图表 ${index + 1}`,
-        (chart.pivot_config || { filters: [], axes: [], legend: [], values: [] }) as PivotConfig,
-        '',
-        chart.chart_type || 'bar',
-        chart.vega_spec || null,
-        chart.data || null,
-      )
-
-      if (!saved) {
-        const message = chartStore.error || '保存失败'
-        if (savedCount > 0) {
-          ElMessage.warning(`已保存 ${savedCount} 个图表，剩余保存失败：${message}`)
-          return
-        }
-
-        ElMessage.warning(message)
-        return
-      }
-
-      savedCount += 1
-    }
-
-    ElMessage.success(`已批量保存 ${savedCount} 个图表到看板`)
-    emit('close')
-  } finally {
-    batchSaving.value[messageKey] = false
-  }
+    const bid=boardStore.activeBoardId; if(!bid){ElMessage.warning('请先选择一个看板');return}
+    await chartStore.fetchCharts(bid)
+    if(chartStore.charts.length>=MAX_BOARD_CHARTS) { ElMessage.warning(`看板最多 ${MAX_BOARD_CHARTS} 个`); return }
+    const ok=await chartStore.saveChart(saveTitle.value.trim(), selChart.value.pivot_config||{filters:[],axes:[],legend:[],values:[]},'', selChart.value.chart_type||'bar', null, selChart.value.data, bid)
+    if(!ok) { ElMessage.warning(chartStore.error||'保存失败'); return }
+    ElMessage.success('已保存到看板'); dlgSave.value=false
+  } finally { saving.value=false }
 }
 
-function onSuggest(text: string) {
-  if (chatStore.loading) return
-  chatStore.sendMessage(text)
+function handleSaveCfg() {
+  cfgErr.value=''
+  try { JSON.parse(editCfgText.value); chatStore.updateUserConfig(editCfgText.value); ElMessage.success('配置已保存'); showSettings.value=false }
+  catch { cfgErr.value='JSON 格式错误' }
 }
 
-// 滚动到底部
-watch(() => chatStore.messages.length, async () => {
-  await nextTick()
-  if (messagesRef.value) {
-    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-  }
+function fmtTime(ts:string) {
+  const d=new Date(ts), n=new Date()
+  if(d.toDateString()===n.toDateString()) return `今天 ${d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`
+  const y=new Date(n); y.setDate(y.getDate()-1)
+  if(d.toDateString()===y.toDateString()) return `昨天 ${d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`
+  return d.toLocaleDateString('zh-CN')
+}
+
+onMounted(()=>{
+  editCfgText.value=chatStore.userConfig
 })
+watch(()=>chatStore.userConfig,v=>{ editCfgText.value=v })
+watch(isFullscreen,(val)=>{ sidebarOpen.value=val })
+watch(()=>chatStore.messages.length,()=>scrollToBottom())
 </script>
 
 <style scoped>
+/* ====== 布局 ====== */
 .ai-dialog {
   display: flex;
-  flex-direction: column;
-  height: 80vh;
-  background: white;
-  border-radius: 8px;
+  height: 100%;
+  background: #fff;
+  color: #1f2937;
+  font-size: 14px;
+  position: relative;
   overflow: hidden;
 }
 
-.dialog-header {
+.ai-dialog.fullscreen-mode {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: #fff;
+}
+
+/* ====== 侧边栏 ====== */
+.dialog-sidebar {
+  width: 0;
+  flex-shrink: 0;
+  background: #f7f7f8;
+  border-right: 1px solid #e5e5e5;
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+.dialog-sidebar.sidebar-visible {
+  width: 240px;
+}
+
+.sidebar-inner {
+  width: 240px;
+  height: 100%;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 10px;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.sidebar-new-btn {
+  width: 100%;
+  display: flex;
   align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #ebeef5;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s;
 }
 
-.dialog-header h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
+.sidebar-new-btn:hover { background: #f3f4f6; }
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
 }
 
+.sidebar-empty {
+  text-align: center;
+  color: #9ca3af;
+  font-size: 12px;
+  padding: 20px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
+  margin: 1px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.sidebar-item:hover { background: #e5e7eb; }
+.sidebar-item.active { background: #e5e7eb; }
+
+.sidebar-item-icon {
+  flex-shrink: 0;
+  color: #6b7280;
+}
+
+.sidebar-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-item-title {
+  font-size: 13px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-item-time {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.sidebar-item-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s;
+}
+
+.sidebar-item:hover .sidebar-item-del { opacity: 1; }
+.sidebar-item-del:hover { background: #f3f4f6; color: #ef4444; }
+
+
+/* ====== 主面板 ====== */
+.dialog-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ====== 顶栏 ====== */
+.dialog-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.topbar-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.dialog-title { font-size: 14px; font-weight: 600; color: #1f2937; margin-left: 4px; }
+.topbar-btn:hover { background: #f3f4f6; color: #374151; }
+
+.mode-selector {
+  display: flex;
+  background: #f3f4f6;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+
+.mode-btn.active {
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
+
+.mode-btn:hover:not(.active) { color: #374151; }
+
+/* ====== 消息区 ====== */
 .dialog-messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
 }
 
+/* 空状态 */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #c0c4cc;
   text-align: center;
   gap: 12px;
+  color: #9ca3af;
 }
 
-.empty-state p {
-  font-size: 14px;
+.empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
 }
 
-.suggestions {
+.empty-desc { font-size: 13px; }
+
+.empty-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  max-width: 300px;
+  max-width: 360px;
 }
 
-.suggestion-tag {
+.empty-chip {
+  padding: 5px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
   cursor: pointer;
+  transition: all .15s;
 }
 
-.message {
-  margin-bottom: 16px;
+.empty-chip:hover { background: #f3f4f6; border-color: #d1d5db; }
+
+/* 消息 */
+.msg-row {
   display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  max-width: 760px;
+  padding: 0 8px;
 }
 
-.message.user {
-  justify-content: flex-end;
+.msg-avatar { flex-shrink: 0; }
+
+.avt {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.message.assistant {
-  justify-content: flex-start;
+.avt-user { background: #3b82f6; color: #fff; }
+.avt-ai { background: #8b5cf6; color: #fff; }
+
+.msg-bubble {
+  max-width: calc(100% - 42px);
+  min-width: 0;
 }
 
-.message-content {
-  max-width: 85%;
-  padding: 10px 14px;
-  border-radius: 12px;
+.msg-text {
   font-size: 14px;
-  line-height: 1.5;
-}
-
-.message.user .message-content {
-  background: #409eff;
-  color: white;
-  border-radius: 12px 4px 12px 12px;
-}
-
-.message.assistant .message-content {
-  background: #f0f2f5;
-  color: #303133;
-  border-radius: 4px 12px 12px 12px;
-}
-
-.message-text {
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.chart-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #303133;
-  padding: 8px 12px 0;
+.msg-row.user .msg-text {
+  background: #f0f4ff;
+  padding: 8px 14px;
+  border-radius: 14px 4px 14px 14px;
+}
+
+/* 图表卡片 */
+.msg-charts {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .chart-card {
-  width: 500px;
-  background: white;
-  border-radius: 8px;
-  margin: 10px 0;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 12px;
-  padding: 8px 12px;
-}
-
-.card-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.card-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-
-.action-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-}
-
-.action-btn-primary {
-  color: #409eff;
-}
-
-.action-btn-primary:hover {
-  background: #ecf5ff;
-  color: #409eff;
-}
-
-.action-btn-danger {
-  color: #f56c6c;
-}
-
-.action-btn-danger:hover {
-  background: #fef0f0;
-  color: #f56c6c;
-}
-
-
-.message-chart {
-  margin-top: 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
   overflow: hidden;
 }
 
-.chart-actions {
-  padding: 8px;
-  text-align: right;
-  border-top: 1px solid #ebeef5;
+.chart-card-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f3f4f6;
 }
 
-.typing-dots {
+.chart-card-title { font-size: 12px; font-weight: 600; color: #374151; }
+
+.chart-card-actions {
   display: flex;
   gap: 2px;
-  padding: 4px 0;
 }
 
-.typing-dots span {
-  animation: blink 1.4s infinite;
-  font-size: 24px;
-  line-height: 1;
-}
-
-.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0; }
-  40% { opacity: 1; }
-}
-
-.dialog-input {
+.chart-card-actions button {
+  width: 26px;
+  height: 26px;
   display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid #ebeef5;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all .15s;
 }
 
-.dialog-input .el-textarea {
-  flex: 1;
-}
+.chart-card-actions button:hover { background: #f3f4f6; color: #3b82f6; }
 
-.send-btn {
-  height: 36px;
-}
+.chart-card-body { min-height: 180px; }
 
-.card-chart {
-  min-height: 0;
-}
-
-.chart-error {
+.chart-err {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 32px 16px;
-  color: #909399;
+  padding: 28px;
+  color: #9ca3af;
   font-size: 13px;
   background: #fafafa;
-  border-radius: 8px;
 }
 
-.batch-board-save-bar {
+.msg-sugs {
+  margin-top: 8px;
   display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-  margin-bottom: 18px;
-}
-
-.batch-board-save-btn {
+  flex-wrap: wrap;
   gap: 6px;
-  background: #2f6bcb;
-  border-color: #2f6bcb;
-  color: #ffffff;
-  box-shadow: 0 6px 14px rgba(47, 107, 203, 0.18);
 }
 
-.batch-board-save-btn:hover,
-.batch-board-save-btn:focus {
-  background: #2559b3;
-  border-color: #2559b3;
-  color: #ffffff;
+.sug-chip {
+  padding: 3px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
 }
+
+.sug-chip:hover { background: #f3f4f6; border-color: #d1d5db; }
+
+.typing { animation: blink 1.4s infinite; font-size: 24px; letter-spacing: 2px; }
+
+@keyframes blink {
+  0%,80%,100% { opacity: .3; }
+  40% { opacity: 1; }
+}
+
+/* ====== 输入区 ====== */
+.dialog-input {
+  flex-shrink: 0;
+  padding: 10px 16px 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.input-wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 14px;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.input-wrap:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59,130,246,.12);
+}
+
+.input-ta {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  color: #1f2937;
+  background: transparent;
+  max-height: 200px;
+}
+
+.input-ta::placeholder { color: #9ca3af; }
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: #fff;
+  cursor: pointer;
+  transition: background .15s;
+  flex-shrink: 0;
+}
+
+.send-btn:hover:not(:disabled) { background: #2563eb; }
+.send-btn:disabled { background: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
+
+/* ====== 公共 ====== */
+.code-block {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-block.sql { font-family: 'SF Mono','Menlo','Consolas',monospace; }
+
+
+
+
+/* ====== 历史下拉 ====== */
+.history-dropdown-wrapper {
+  position: relative;
+}
+
+.history-dropdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 98;
+}
+
+.history-dropdown {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  width: 240px;
+  max-height: 50vh;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  z-index: 99;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: all .2s ease;
+}
+
+.history-dropdown.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.hd-header { padding: 8px; border-bottom: 1px solid #f0f0f0; }
+
+.hd-new-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.hd-new-btn:hover { background: #f3f4f6; }
+
+.hd-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+.hd-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 1px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.hd-item:hover { background: #f3f4f6; }
+.hd-item.active { background: #e5e7eb; }
+
+.hd-ico { flex-shrink: 0; color: #6b7280; }
+
+.hd-title {
+  flex: 1; min-width: 0;
+  font-size: 13px; color: #1f2937;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.hd-del {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 4px;
+  background: transparent; color: #9ca3af;
+  cursor: pointer; opacity: 0;
+  transition: opacity .15s;
+}
+
+.hd-item:hover .hd-del { opacity: 1; }
+.hd-del:hover { background: #f3f4f6; color: #ef4444; }
+
 </style>

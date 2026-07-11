@@ -1614,7 +1614,6 @@ defineExpose({
   background: white;
   border-radius: 8px;
   padding: 0;
-  min-height: 400px;
   overflow: hidden;
 }
 
@@ -1658,17 +1657,20 @@ defineExpose({
 }
 
 .vega-container {
-  flex: 1;
   width: 100%;
   overflow: hidden;
   height: 300px;
 }
+:deep(.vega-container > svg) {
+  width: 100%;
+  height: 100%;
+}
 
 .vega-container.reserve-side-legend-space {
-  width: calc(100% - clamp(128px, 16vw, 180px));
+  /* width: calc(100% - clamp(128px, 16vw, 180px));
   max-width: calc(100% - clamp(128px, 16vw, 180px));
   align-self: flex-start;
-  overflow: visible;
+  overflow: visible; */
 }
 
 .vega-renderer.is-fullscreen,

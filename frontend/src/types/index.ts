@@ -144,6 +144,10 @@ export interface ChatMessage {
   content: string
   vega_spec?: Record<string, any>
   pivot_config?: PivotConfig
+  charts?: any[]
+  suggestions?: string[]
+  ask_questions?: any[]
+  pending_step?: string | null
 }
 
 /** 四象限拖拽区域类型 */

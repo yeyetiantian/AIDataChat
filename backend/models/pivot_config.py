@@ -84,6 +84,14 @@ class PivotResponse(BaseModel):
     sql: Optional[str] = Field(None, description="生成的 SQL（调试用）")
     execution_time_ms: float = Field(0, description="执行耗时（毫秒）")
 
+class RuleRecommendation(BaseModel):
+    """规则函数推荐"""
+    rule_name: str = Field(..., description="规则名称")
+    rule_type: Optional[str] = Field(None, description="规则类型")
+    description: str = Field("", description="规则功能说明")
+    priority: Optional[str] = Field(None, description="优先级/重要程度")
+
+
 class ChatRequest(BaseModel):
     """AI 对话请求"""
     message: str = Field(..., description="用户自然语言输入")
@@ -94,5 +102,11 @@ class ChatResponse(BaseModel):
     reply: str = Field(..., description="AI 回复文本")
     charts: list[dict[str, Any]] = Field(default_factory=list, description="图表列表（每个元素含 pivot_config/data/sql/chart_type）")
     suggestions: list[str] = Field(default_factory=list, description="AI 推荐的下一个问题")
+    rules: list[dict[str, Any]] = Field(default_factory=list, description="规则函数推荐列表")
     session_id: str = Field("", description="会话 ID")
+    trace_id: str = Field("", description="Agent 执行 trace ID")
+    is_dashboard: bool = Field(False, description="是否为看板模式（多图表一起展示）")
+    charts_count: int = Field(0, description="图表数量（看板模式下生效）")
     execution_time_ms: float = Field(0, description="执行耗时")
+    ask_questions: list[dict[str, Any]] = Field(default_factory=list, description="交互式问卷（需用户进一步输入时返回）")
+    pending_step: Optional[str] = Field(None, description="挂起步骤标识（如 awaiting_questions）")

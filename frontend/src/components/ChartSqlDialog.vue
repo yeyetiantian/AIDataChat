@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visibleModel" :title="title" width="700px" top="8vh" destroy-on-close>
+  <ModelDialog ref="modelRef" :title="title" width="600px" top="8vh" >
     <div class="sql-toolbar">
       <el-button size="small" @click="copyContent">
         <el-icon><DocumentCopy /></el-icon>
@@ -9,46 +9,37 @@
     <div class="sql-content">
       <pre><code>{{ content || '-- 无内容' }}</code></pre>
     </div>
-  </el-dialog>
+  </ModelDialog>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentCopy } from '@element-plus/icons-vue'
+import ModelDialog from './ModelDialog.vue'
 
-const props = withDefaults(defineProps<{
-  visible: boolean
-  content?: string | null
-  title?: string
-  lang?: string
-}>(), {
-  content: '',
-  title: '查看',
-  lang: 'sql',
-})
+const modelRef = ref<InstanceType<typeof ModelDialog> | null>(null)
+const content = ref('')
+const title = ref('查看')
 
-const emit = defineEmits<{
-  'update:visible': [value: boolean]
-}>()
-
-const visibleModel = computed({
-  get: () => props.visible,
-  set: (v) => emit('update:visible', v),
-})
+const open = (con?: string, type?: 'json' | 'sql') => {
+  content.value = con || ''
+  title.value = type === 'sql' ? '查看 SQL' : '查看配置'
+  modelRef.value?.open()
+}
 
 async function copyContent() {
-  if (!props.content) {
+  if (!content.value) {
     ElMessage.info('无内容可复制')
     return
   }
   try {
-    await navigator.clipboard.writeText(props.content)
+    await navigator.clipboard.writeText(content.value)
     ElMessage.success('已复制')
   } catch {
     // fallback
     const ta = document.createElement('textarea')
-    ta.value = props.content
+    ta.value = content.value
     document.body.appendChild(ta)
     ta.select()
     document.execCommand('copy')
@@ -56,13 +47,19 @@ async function copyContent() {
     ElMessage.success('已复制')
   }
 }
+
+defineExpose({
+  open
+})
 </script>
 
 <style scoped>
 .sql-toolbar {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 12px;
+  position: absolute;
+  top: 11px;
+  right: 45px;
 }
 
 .sql-content {

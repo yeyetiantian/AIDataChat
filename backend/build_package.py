@@ -84,27 +84,6 @@ HIDDEN_IMPORTS = [
     "importlib.metadata",
 ]
 
-
-def _ensure_data_dir() -> None:
-    """确保 data/ 目录存在，创建默认数据文件（data/ 在 .gitignore 中）"""
-    data_dir = BACKEND_DIR / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # charts.json：看板数据存储
-    charts_file = data_dir / "charts.json"
-    if not charts_file.exists():
-        charts_file.write_text("[]", encoding="utf-8")
-        print(f"[build] 创建默认 {charts_file}")
-
-    # wide_fields.json：字段注册表缓存
-    fields_file = data_dir / "wide_fields.json"
-    if not fields_file.exists():
-        import json as _json
-        default_fields = []
-        fields_file.write_text(_json.dumps(default_fields, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[build] 创建默认空 {fields_file}")
-
-
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包"""
     print("[build] >>> 执行 PyInstaller 打包...")
@@ -113,8 +92,6 @@ def run_pyinstaller() -> None:
         shutil.rmtree(OUTPUT_DIR)
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
-
-    _ensure_data_dir()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -135,10 +112,6 @@ def run_pyinstaller() -> None:
     for imp in HIDDEN_IMPORTS:
         cmd.append("--hidden-import")
         cmd.append(imp)
-
-    # --add-data: data 目录（wide_fields.json, charts.json）
-    cmd.append("--add-data")
-    cmd.append(f"data{os.pathsep}data")
 
     cmd.append(str(BACKEND_DIR / "run.py"))
 

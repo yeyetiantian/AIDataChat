@@ -258,13 +258,13 @@ function getChartTypeLabel(chartType: string) {
   return chartTypeLabels[chartType] || chartType || '未知图表'
 }
 
-onMounted(async () => {
-  try {
-    await store.fetchCharts()
-  } finally {
-    initialLoading.value = false
-  }
-})
+import { watch } from 'vue'
+import { useBoardStore } from '@/stores/useBoardStore'
+const boardStore = useBoardStore()
+watch(() => store.loading, (v) => { if (!v) initialLoading.value = false }, { immediate: true })
+watch(() => store.charts.length, () => { initialLoading.value = false })
+// 数据由 BoardView 管理，组件只负责渲染
+// 数据由 BoardView 管理，组件只负责渲染
 </script>
 
 <style scoped>
@@ -466,7 +466,7 @@ onMounted(async () => {
   color: #909399;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1000px) {
   .chart-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

@@ -7,6 +7,7 @@ export const MAX_BOARD_CHARTS = 6
 
 export interface SavedChart {
   id: number
+  board_id?: number
   title: string
   description: string
   pivot_config: PivotConfig
@@ -19,20 +20,25 @@ export interface SavedChart {
 
 const API_BASE = '/api/charts'
 
+function getUserId(): number {
+  try { return Number(localStorage.getItem('ai_chat_user_id')) || 1 } catch { return 1 }
+}
+
 export const useChartStore = defineStore('charts', () => {
   const charts = ref<SavedChart[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchCharts() {
+  async function fetchCharts(boardId: number) {
     loading.value = true
     error.value = null
 
     try {
-      const resp = await fetch(API_BASE)
-      if (!resp.ok) throw new Error('加载看板失败')
+      const resp = await fetch(`${API_BASE}?board_id=${boardId}`)
+      if (!resp.ok) throw new Error('加载看板图表失败')
 
       charts.value = await resp.json()
+
       syncBoardSlotMap(charts.value, MAX_BOARD_CHARTS)
     } catch (e: any) {
       error.value = e.message
@@ -48,20 +54,22 @@ export const useChartStore = defineStore('charts', () => {
     chartType = 'bar',
     vegaSpec?: Record<string, any> | null,
     data?: Record<string, any>[] | null,
+    boardId?: number,
     preferredSlot?: number,
   ) {
     loading.value = true
     error.value = null
 
     try {
-      const listResp = await fetch(API_BASE)
+      if (!boardId) throw new Error('请先选择一个看板')
+
+      // 检查当前看板图表数量
+      const listResp = await fetch(`${API_BASE}?board_id=${boardId}`)
       if (!listResp.ok) throw new Error('加载看板失败')
+      const existingCharts: SavedChart[] = await listResp.json()
 
-      charts.value = await listResp.json()
-      syncBoardSlotMap(charts.value, MAX_BOARD_CHARTS)
-
-      if (charts.value.length >= MAX_BOARD_CHARTS) {
-        throw new Error(`看板最多只能保存 ${MAX_BOARD_CHARTS} 个`)
+      if (existingCharts.length >= MAX_BOARD_CHARTS) {
+        throw new Error(`每个看板最多只能保存 ${MAX_BOARD_CHARTS} 个图表`)
       }
 
       const resp = await fetch(API_BASE, {
@@ -72,18 +80,19 @@ export const useChartStore = defineStore('charts', () => {
           description,
           pivot_config: pivotConfig,
           chart_type: chartType,
-          vega_spec: vegaSpec,
           data,
+          board_id: boardId,
+          user_id: getUserId(),
         }),
       })
       if (!resp.ok) throw new Error('保存失败')
 
       const createdChart: SavedChart = await resp.json()
       if (typeof preferredSlot === 'number') {
-        assignBoardSlot(createdChart.id, preferredSlot, [...charts.value, createdChart], MAX_BOARD_CHARTS)
+        assignBoardSlot(createdChart.id, preferredSlot, [...existingCharts, createdChart], MAX_BOARD_CHARTS)
       }
 
-      await fetchCharts()
+      await fetchCharts(boardId)
       return charts.value.find(chart => chart.id === createdChart.id) || createdChart
     } catch (e: any) {
       error.value = e.message
@@ -116,7 +125,7 @@ export const useChartStore = defineStore('charts', () => {
     }
   }
 
-  async function updateChart(id: number, data: Partial<SavedChart>) {
+  async function updateChart(id: number, data: Partial<SavedChart>, boardId?: number) {
     loading.value = true
     error.value = null
 
@@ -128,7 +137,7 @@ export const useChartStore = defineStore('charts', () => {
       })
       if (!resp.ok) throw new Error('更新失败')
 
-      await fetchCharts()
+      if (boardId) await fetchCharts(boardId)
     } catch (e: any) {
       error.value = e.message
     } finally {

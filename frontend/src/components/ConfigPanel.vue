@@ -4,11 +4,11 @@
     <div class="panel-section">
       <div class="section-header">
         <span class="section-title">报表配置</span>
+        <el-icon size="18" class="close-btn" @click="emit('close')">
+          <Close />
+        </el-icon>
       </div>
       <div class="section-body">
-        <div class="field-search">
-          <el-input v-model="search" placeholder="搜索字段..." size="small" clearable prefix-icon="Search" />
-        </div>
         <div class="field-groups-row">
           <div v-if="fixedFieldGroup" class="field-group-col">
             <div class="field-group-label">
@@ -28,12 +28,12 @@
           <div class="field-group-col">
             <div class="field-group-label">
               <span>信号列表</span>
-              <el-tag size="small" type="info" round>{{ filteredSignalFields.length }}</el-tag>
+              <el-tag size="small" type="info" round>{{ signalFields.length }}</el-tag>
             </div>
             <div class="field-items">
-              <div v-if="filteredSignalFields.length === 0" class="zone-placeholder">暂无信号</div>
+              <div v-if="signalFields.length === 0" class="zone-placeholder">暂无信号</div>
               <div
-                v-for="field in filteredSignalFields" :key="field.name"
+                v-for="field in signalFields" :key="field.name"
                 class="field-item" draggable="true"
                 @dragstart="onDragStart($event, field, true)"
               >
@@ -422,7 +422,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, toRef, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document, ArrowDown } from '@element-plus/icons-vue'
+import { Filter, DataAnalysis, PieChart, Histogram, Delete, Document, ArrowDown, Close } from '@element-plus/icons-vue'
 import type {
   FieldDef,
   ZoneType,
@@ -507,6 +507,8 @@ const props = defineProps<{
   configName?: string
 }>()
 
+const emit = defineEmits<{ close: [] }>()
+
 // ========== stateData：全部内部状态 ==========
 const stateData = reactive({
   // 字段列表
@@ -531,8 +533,6 @@ const stateData = reactive({
   calculatedFields: [] as CalculatedField[],
   calculatedItems: [] as CalculatedItem[],
   requestMeta: undefined as RequestMeta | undefined,
-  // 搜索
-  search: '',
   // 显示方式
   showAsMap: {} as Record<number, string>,
   // 加载状态
@@ -546,7 +546,6 @@ const legend = computed(() => stateData.legend)
 const values = computed(() => stateData.values)
 const loading = computed(() => stateData.loading)
 const canSaveConfig = computed(() => Boolean(props.configName?.trim()))
-const search = toRef(stateData, 'search')
 const showAsMap = stateData.showAsMap as Record<number, string>
 
 // sortField / sortDir / limitVal / chartType（v-model 需要 ref）
@@ -566,23 +565,10 @@ const sortOptions = computed(() => [
 const fixedFieldGroup = computed(() => {
   const first = stateData.groups[0]
   if (!first) return null
-  if (!stateData.search) return first
-  const q = stateData.search.toLowerCase()
-  const fields = first.fields.filter(f =>
-    f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q),
-  )
-  if (fields.length === 0) return null
-  return { ...first, fields }
+  return first
 })
 
-// 右侧信号列表
-const filteredSignalFields = computed(() => {
-  if (!stateData.search) return signalFields.value
-  const q = stateData.search.toLowerCase()
-  return signalFields.value.filter(f =>
-    f.alias_cn.toLowerCase().includes(q) || f.name.toLowerCase().includes(q),
-  )
-})
+
 
 // ========== 方法 ==========
 
@@ -1803,6 +1789,15 @@ onBeforeUnmount(() => {
   background: #f0f2f5;
 }
 
+.close-btn {
+  cursor: pointer;
+  color: #909399;
+  transition: color 0.15s;
+}
+.close-btn:hover {
+  color: #409eff;
+}
+
 .section-title {
   font-size: 13px;
   font-weight: 600;
@@ -1825,9 +1820,6 @@ onBeforeUnmount(() => {
 }
 
 /* 字段列表内联样式 */
-.field-search {
-  padding-bottom: 6px;
-}
 
 .field-groups-row {
   display: flex;
