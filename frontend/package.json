@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev-lock": "vite --mode lock",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview"
   },

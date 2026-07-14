@@ -95,7 +95,24 @@
 </template>
 
 <script setup lang="ts">
-import type { TraceSpan } from '@/views/MonitorView.vue'
+// 保持组件独立，避免从 Vue SFC 导入未导出的仅编译期类型。
+interface TraceSpan {
+  id: string
+  name: string
+  type: 'agent' | 'llm' | 'chain' | 'tool'
+  status: 'success' | 'error'
+  startTime: string
+  endTime?: string
+  duration: string
+  durationMs?: number
+  tokens?: { input: number; output: number }
+  input: any
+  output: any
+  messages?: { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }[]
+  children: TraceSpan[]
+  error?: string
+  _expanded?: boolean
+}
 
 const props = defineProps<{
   span: TraceSpan

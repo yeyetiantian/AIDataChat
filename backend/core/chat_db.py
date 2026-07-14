@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -123,6 +124,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
     """)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_drafts (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            draft_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_drafts_session ON agent_drafts(session_id, status);
+    """)
     conn.commit()
     # Agent Trace 监控表（幂等创建）
     conn.executescript("""
@@ -144,6 +157,19 @@ def init_db():
         conn.execute("ALTER TABLE trace_spans ADD COLUMN request_message TEXT NOT NULL DEFAULT ''")
     except Exception:
         pass
+    # 幂等迁移：给 chat_messages 加 ask_questions_json / pending_step 列
+    try:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN ask_questions_json TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN pending_step TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN rules_json TEXT")
+    except Exception:
+        pass
     seed_default_users()
     # 迁移：给 charts 加 board_id 列（幂等）
     try:
@@ -154,6 +180,26 @@ def init_db():
     seed_default_boards()
     _init_external_data_tables()
     migrate_fields()
+    # 创建数据冻结函数表
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS freeze_functions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            params TEXT DEFAULT '',
+            returns TEXT DEFAULT '',
+            example TEXT DEFAULT '',
+            func_type TEXT DEFAULT '',
+            context TEXT DEFAULT '',
+            remark TEXT DEFAULT '',
+            needs_improvement INTEGER DEFAULT 0,
+            is_deleted INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_freeze_functions_name ON freeze_functions(name);
+        CREATE INDEX IF NOT EXISTS idx_freeze_functions_type ON freeze_functions(func_type);
+    """)
     logger.info("聊天历史数据库已初始化: %s", DB_PATH)
 
 
@@ -368,7 +414,7 @@ def delete_session(session_id: str):
 
 def get_messages(session_id: str) -> list[dict]:
     cur = _get_conn().execute(
-        "SELECT id, session_id, role, content, charts_json, suggestions_json, created_at "
+        "SELECT id, session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step, created_at "
         "FROM chat_messages WHERE session_id = ? ORDER BY id ASC",
         (session_id,),
     )
@@ -389,25 +435,79 @@ def get_messages(session_id: str) -> list[dict]:
                 msg["suggestions"] = []
         else:
             msg["suggestions"] = []
+        if msg["rules_json"]:
+            try:
+                msg["rules"] = json.loads(msg["rules_json"])
+            except json.JSONDecodeError:
+                msg["rules"] = []
+        else:
+            msg["rules"] = []
+        if msg["ask_questions_json"]:
+            try:
+                msg["ask_questions"] = json.loads(msg["ask_questions_json"])
+            except json.JSONDecodeError:
+                msg["ask_questions"] = []
+        else:
+            msg["ask_questions"] = []
         del msg["charts_json"]
         del msg["suggestions_json"]
+        del msg["rules_json"]
+        del msg["ask_questions_json"]
         result.append(msg)
     return result
 
 
-def add_message(session_id: str, role: str, content: str, charts: list = None, suggestions: list = None):
+def add_message(session_id: str, role: str, content: str, charts: list = None, suggestions: list = None, ask_questions: list = None, pending_step: str = None, rules: list = None):
     charts_json = json.dumps(charts, ensure_ascii=False) if charts else None
     suggestions_json = json.dumps(suggestions, ensure_ascii=False) if suggestions else None
+    ask_questions_json = json.dumps(ask_questions, ensure_ascii=False) if ask_questions else None
+    rules_json = json.dumps(rules, ensure_ascii=False) if rules else None
     conn = _get_conn()
     conn.execute(
-        "INSERT INTO chat_messages (session_id, role, content, charts_json, suggestions_json) VALUES (?, ?, ?, ?, ?)",
-        (session_id, role, content, charts_json, suggestions_json),
+        "INSERT INTO chat_messages (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step),
     )
     conn.execute(
         "UPDATE chat_sessions SET updated_at = datetime('now','localtime') WHERE id = ?",
         (session_id,),
     )
     conn.commit()
+
+
+def save_agent_draft(session_id: str, draft_type: str, payload: dict, draft_id: str | None = None) -> str:
+    """创建或更新结构化 Agent 草案，并返回稳定草案 ID。"""
+    import uuid
+    draft_id = draft_id or str(uuid.uuid4())
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = _get_conn()
+    conn.execute(
+        """
+        INSERT INTO agent_drafts (id, session_id, draft_type, payload_json, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'active', ?, ?)
+        ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, status = 'active', updated_at = excluded.updated_at
+        """,
+        (draft_id, session_id, draft_type, json.dumps(payload, ensure_ascii=False), now, now),
+    )
+    conn.commit()
+    return draft_id
+
+
+def get_agent_draft(draft_id: str, session_id: str | None = None) -> dict | None:
+    conn = _get_conn()
+    sql = "SELECT id, session_id, draft_type, payload_json, status, created_at, updated_at FROM agent_drafts WHERE id = ?"
+    params: list[Any] = [draft_id]
+    if session_id is not None:
+        sql += " AND session_id = ?"
+        params.append(session_id)
+    row = conn.execute(sql, params).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    try:
+        result["payload"] = json.loads(result.pop("payload_json"))
+    except json.JSONDecodeError:
+        result["payload"] = {}
+    return result
 
 
 # ====== 看板操作 ======
@@ -751,6 +851,32 @@ def _init_external_data_tables():
             OTHER_SIGNALS TEXT
         );
 
+        -- 规则与信号的确定性关系。由 ext_rules 的历史字符串字段回填，
+        -- 之后可由外部同步任务覆盖/补充。
+        CREATE TABLE IF NOT EXISTS rule_signals (
+            task_rule_id INTEGER NOT NULL,
+            task_id INTEGER,
+            signal_name TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'ext_rules',
+            PRIMARY KEY (task_rule_id, signal_name),
+            FOREIGN KEY (task_rule_id) REFERENCES ext_rules(TASK_RULE_ID)
+        );
+
+        -- 报警统计不是“没有记录”的同义词；data_status 明确说明可用性。
+        CREATE TABLE IF NOT EXISTS signal_stats (
+            task_rule_id INTEGER NOT NULL,
+            task_id INTEGER,
+            signal_name TEXT NOT NULL,
+            alarm_count INTEGER NOT NULL DEFAULT 0,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            period_start TEXT,
+            period_end TEXT,
+            data_status TEXT NOT NULL DEFAULT 'unavailable',
+            updated_at TEXT DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (task_rule_id, signal_name),
+            FOREIGN KEY (task_rule_id) REFERENCES ext_rules(TASK_RULE_ID)
+        );
+
         CREATE TABLE IF NOT EXISTS ext_vehicles (
             TASK_VEHICLE_ID INTEGER PRIMARY KEY,
             TASK_VEHICLETYPE_ID INTEGER,
@@ -776,13 +902,46 @@ def _init_external_data_tables():
         CREATE INDEX IF NOT EXISTS idx_ext_tasks_name ON ext_tasks(TASK_NAME);
         CREATE INDEX IF NOT EXISTS idx_ext_rules_task ON ext_rules(TASK_ID);
         CREATE INDEX IF NOT EXISTS idx_ext_rules_name ON ext_rules(RULE_NAME);
+        CREATE INDEX IF NOT EXISTS idx_rule_signals_task ON rule_signals(task_id);
+        CREATE INDEX IF NOT EXISTS idx_rule_signals_signal ON rule_signals(signal_name);
         CREATE INDEX IF NOT EXISTS idx_ext_vehicles_task ON ext_vehicles(TASK_ID);
         CREATE INDEX IF NOT EXISTS idx_ext_vehicle_types_task ON ext_vehicle_types(TASK_ID);
     """)
+    # 兼容历史 signal_stats（旧表只有 signal_type / task_rule_id / alarm_count）。
+    # CREATE TABLE IF NOT EXISTS 不会升级既有表，因此迁移必须在建表后显式执行。
+    for column_name, column_type in (
+        ("task_id", "INTEGER"),
+        ("sample_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("period_start", "TEXT"),
+        ("period_end", "TEXT"),
+        ("data_status", "TEXT NOT NULL DEFAULT 'unavailable'"),
+        ("updated_at", "TEXT"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE signal_stats ADD COLUMN {column_name} {column_type}")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_stats_task ON signal_stats(task_id)")
+    except sqlite3.OperationalError:
+        pass
+    # 历史 signal_stats 已是从报警数据导入的表。补全 task_id 后标记为可用，
+    # 让后续聚合不再把真实报警统计误判为“不可用”。
+    conn.execute(
+        """
+        UPDATE signal_stats
+        SET task_id = (SELECT TASK_ID FROM ext_rules WHERE TASK_RULE_ID = signal_stats.task_rule_id),
+            data_status = 'available'
+        WHERE task_id IS NULL
+          AND EXISTS (SELECT 1 FROM ext_rules WHERE TASK_RULE_ID = signal_stats.task_rule_id)
+        """
+    )
+    conn.commit()
 
     # 判断是否需要导入 seed 数据
     cur = conn.execute("SELECT COUNT(*) FROM ext_tasks")
     if cur.fetchone()[0] > 0:
+        _backfill_rule_signal_relations(conn)
         _EXT_DATA_INITIALIZED = True
         logger.info("外部数据维表已存在，跳过 seed 导入")
         return
@@ -816,6 +975,7 @@ def _init_external_data_tables():
                     )
                 logger.info("  已导入 %s -> %s (%d rows)", csv_file, table_name, len(rows))
             conn.commit()
+            _backfill_rule_signal_relations(conn)
             _EXT_DATA_INITIALIZED = True
             logger.info("已从 ext_data_csv/ 导入外部数据维表")
         except Exception as e:
@@ -824,6 +984,48 @@ def _init_external_data_tables():
             traceback.print_exc()
     else:
         logger.warning("ext_data_csv/ 目录不存在，跳过外部数据导入")
+
+
+def _parse_signal_names(raw: Any) -> list[str]:
+    """解析 ext_rules 中可能为 JSON 或分隔字符串的信号字段。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+        if isinstance(decoded, list):
+            return _parse_signal_names(decoded)
+        if isinstance(decoded, dict):
+            values: list[str] = []
+            for value in decoded.values():
+                values.extend(_parse_signal_names(value))
+            return values
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return [item.strip(" []{}\"'") for item in re.split(r"[,;|\n]", text) if item.strip(" []{}\"'")]
+
+
+def _backfill_rule_signal_relations(conn: sqlite3.Connection) -> None:
+    """将历史规则中的信号字符串回填为关系；不伪造报警统计。"""
+    rows = conn.execute(
+        "SELECT TASK_RULE_ID, TASK_ID, RULE_SIGNALS, OTHER_SIGNALS FROM ext_rules"
+    ).fetchall()
+    relation_rows: list[tuple[int, int | None, str, str]] = []
+    for row in rows:
+        for field_name in ("RULE_SIGNALS", "OTHER_SIGNALS"):
+            for signal in _parse_signal_names(row[field_name]):
+                relation_rows.append((row["TASK_RULE_ID"], row["TASK_ID"], signal, field_name.lower()))
+    if not relation_rows:
+        return
+    conn.executemany(
+        "INSERT OR IGNORE INTO rule_signals (task_rule_id, task_id, signal_name, source) VALUES (?, ?, ?, ?)",
+        relation_rows,
+    )
+    conn.commit()
 
 
 # ============================================================
@@ -884,6 +1086,42 @@ def list_task_rules(task_id: int) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
+def list_rule_signal_stats(task_id: int) -> list[dict]:
+    """按任务聚合信号、关联规则和报警统计。
+
+    ``unavailable`` 表示仅从规则元数据得到了信号关系，未导入真实报警统计。
+    """
+    conn = _get_conn()
+    cur = conn.execute(
+        """
+        SELECT
+            rs.signal_name,
+            GROUP_CONCAT(DISTINCT rs.task_rule_id) AS rule_ids,
+            COALESCE(SUM(ss.alarm_count), 0) AS alarm_count,
+            COALESCE(SUM(ss.sample_count), 0) AS sample_count,
+            MAX(ss.updated_at) AS updated_at,
+            CASE
+                WHEN SUM(CASE WHEN ss.data_status = 'available' THEN 1 ELSE 0 END) > 0 THEN 'available'
+                WHEN COUNT(ss.task_rule_id) > 0 THEN 'unavailable'
+                ELSE 'no_data'
+            END AS data_status
+        FROM rule_signals rs
+        LEFT JOIN signal_stats ss
+            ON ss.task_rule_id = rs.task_rule_id AND ss.signal_name = rs.signal_name
+        WHERE rs.task_id = ?
+        GROUP BY rs.signal_name
+        ORDER BY alarm_count DESC, rs.signal_name ASC
+        """,
+        (task_id,),
+    )
+    result: list[dict] = []
+    for row in cur.fetchall():
+        item = dict(row)
+        item["rule_ids"] = [int(value) for value in (item.get("rule_ids") or "").split(",") if value]
+        result.append(item)
+    return result
+
+
 def get_task(task_id: int) -> dict | None:
     """获取单个任务"""
     conn = _get_conn()
@@ -898,6 +1136,74 @@ def get_rule(rule_id: int) -> dict | None:
     cur = conn.execute("SELECT * FROM ext_rules WHERE TASK_RULE_ID = ?", (rule_id,))
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+# ====== 数据冻结函数 ======
+
+def list_freeze_functions(deleted: bool = False) -> list[dict]:
+    """列出数据冻结函数（不含已删除的，除非指定 deleted=True）"""
+    conn = _get_conn()
+    if deleted:
+        cur = conn.execute("SELECT * FROM freeze_functions ORDER BY id ASC")
+    else:
+        cur = conn.execute("SELECT * FROM freeze_functions WHERE is_deleted = 0 ORDER BY id ASC")
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_freeze_function(func_id: int) -> dict | None:
+    """获取单个函数（含已删除的）"""
+    conn = _get_conn()
+    cur = conn.execute("SELECT * FROM freeze_functions WHERE id = ?", (func_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def soft_delete_freeze_function(func_id: int) -> bool:
+    """软删除函数"""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE freeze_functions SET is_deleted = 1, updated_at = datetime('now','localtime') WHERE id = ? AND is_deleted = 0",
+        (func_id,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def restore_freeze_function(func_id: int) -> bool:
+    """恢复被软删除的函数"""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE freeze_functions SET is_deleted = 0, updated_at = datetime('now','localtime') WHERE id = ? AND is_deleted = 1",
+        (func_id,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def import_freeze_functions(functions: list[dict]) -> int:
+    """批量导入数据冻结函数（幂等：先清空后导入）"""
+    conn = _get_conn()
+    conn.execute("DELETE FROM freeze_functions")
+    count = 0
+    for f in functions:
+        conn.execute(
+            "INSERT INTO freeze_functions (name, description, params, returns, example, func_type, context, remark, needs_improvement, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f.get("name", ""),
+                f.get("description", ""),
+                f.get("params", ""),
+                f.get("returns", ""),
+                f.get("example", ""),
+                f.get("func_type", ""),
+                f.get("context", ""),
+                f.get("remark", ""),
+                1 if f.get("needs_improvement") else 0,
+                1 if f.get("is_deleted") else 0,
+            ),
+        )
+        count += 1
+    conn.commit()
+    return count
 
 
 def list_vehicles_for_task(task_id: int) -> list[dict]:

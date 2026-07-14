@@ -115,6 +115,22 @@
                 </div>
               </div>
             </div>
+            <div v-if="msg.rules?.length" class="msg-rules">
+              <article v-for="(rule, ri) in msg.rules" :key="ri" class="rule-card">
+                <div class="rule-card-head">
+                  <strong>{{ rule.name || '未命名' }}</strong>
+                </div>
+                <div v-if="rule.reason" class="rule-reason">{{ rule.reason }}</div>
+                <div v-if="rule.applicable_signals?.length" class="rule-section">
+                  <span class="rule-label">适用信号</span>
+                  <span v-for="sig in rule.applicable_signals" :key="sig" class="rule-chip">{{ sig }}</span>
+                </div>
+                <div v-if="rule.usage_example" class="rule-example">
+                  <span class="rule-label">示例</span>
+                  <code>{{ rule.usage_example }}</code>
+                </div>
+              </article>
+            </div>
             <div v-if="msg.suggestions?.length" class="msg-sugs">
               <button v-for="sg in msg.suggestions" :key="sg" class="sug-chip" @click="sendText(sg)">{{ sg }}</button>
             </div>
@@ -191,7 +207,6 @@ function sendText(t:string) {
 }
 function handleSwitch(id:string) {
   chatStore.switchSession(id)
-  sidebarOpen.value = false
   scrollToBottom()
 }
 
@@ -201,19 +216,43 @@ function toggleFullscreen() {
 
 /**
  * 用户提交问卷答案 → 发给 AI 继续处理
+ * 提交格式：[问卷提交] + 中文排版，展示图表槽配置
+ * 提交后隐藏问卷面板不可再次发送
  */
 async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
-  const answerLines = Object.entries(answers).map(([key, val]) => {
-    const q = (msg.ask_questions || []).find((q: any) => q.id === key)
-    const label = q?.question || key
-    if (Array.isArray(val)) {
-      return '- ' + label + ': ' + val.join(', ')
-    }
-    return '- ' + label + ': ' + val
+  const chartCount = answers.chart_count || 3
+  const taskId = answers.task_id || ''
+  const slots = answers.chart_slots || []
+
+  // 获取任务名称
+  const taskQ = (msg.ask_questions || []).find((x: any) => x.id === 'task_id')
+  const taskOpt = taskQ?.options?.find((o: any) => String(o.value) === String(taskId))
+  const taskLabel = taskOpt?.label?.replace(/\([A-Z_]+=\d+\)\s*/g, '') || taskId || '未选择'
+
+  const lines: string[] = ['📊 看板需求确认']
+  lines.push(`图表数量：${chartCount}个`)
+  lines.push(`关联任务：${taskLabel}`)
+
+  // 每个图表的配置
+  for (const slot of slots) {
+    const desc = slot.dimension ? `（${slot.dimension}）` : ''
+    lines.push(`图表${slot.index}${desc}`)
+  }
+
+  const formattedMsg = '[看板草案]\n' + lines.join('\n')
+  msg.ask_questions = []
+  msg.pending_step = null
+  chatStore.sendMessage(formattedMsg, {
+    dashboardDraft: {
+      goal: '报警分析总览',
+      task_id: Number(taskId),
+      chart_count: Number(chartCount),
+      rule_ids: (answers.rule_ids || []).map(Number).filter(Number.isFinite),
+      signal_names: answers.signal_names || [],
+      chart_slots: slots.map((slot: any) => ({ index: slot.index, description: slot.dimension || '' })),
+    },
   })
-  const structuredMsg = '我的看板需求：\n' + answerLines.join('\n')
-  inputText.value = structuredMsg
-  handleSend()
+  scrollToBottom()
 }
 
 function toggleFullscreenChart(msgIdx: number, chartIdx: number) {
@@ -807,5 +846,34 @@ watch(()=>chatStore.messages.length,()=>scrollToBottom())
 
 .hd-item:hover .hd-del { opacity: 1; }
 .hd-del:hover { background: #f3f4f6; color: #ef4444; }
+
+/* ====== 规则函数推荐 ====== */
+.msg-rules { display: grid; gap: 8px; margin-top: 8px; }
+.rule-card {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+.rule-card-head { margin-bottom: 4px; }
+.rule-card-head strong { font-size: 15px; color: #2563eb; font-family: 'Menlo', monospace; }
+.rule-reason { margin: 4px 0; color: #334155; font-size: 12px; line-height: 1.5; }
+.rule-section { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.rule-label { color: #64748b; font-size: 11px; font-weight: 600; margin-right: 2px; }
+.rule-chip { padding: 2px 6px; border-radius: 4px; background: #e0f2fe; color: #075985; font-size: 11px; }
+.rule-example { margin-top: 6px; }
+.rule-example code {
+  display: block;
+  padding: 5px 8px;
+  margin-top: 2px;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #a5f3fc;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.rule-example .rule-label { display: block; }
 
 </style>

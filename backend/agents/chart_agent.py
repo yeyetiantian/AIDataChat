@@ -18,17 +18,18 @@ from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
 from agents.llm_utils import (
-    is_private_provider,
     get_llm,
     get_structured_llm,
+    call_structured,
     try_parse_json,
     save_trace_log,
     TraceCollector,
     SpanNode,
 )
 from core.field_registry import get_schema_for_agent, get_fixed_field_names
-from llm import get_auth_headers
-from models import PivotConfig, PivotResponse
+from services.query_preprocessor import ParsedChartRequest, preprocess_chart_query
+from services.dashboard_recommender import dashboard_plan_prompt
+from models import DashboardRequestDraft, PivotConfig
 
 logger = logging.getLogger("chart_agent")
 
@@ -40,37 +41,62 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # Structured Output 模型
 # ============================================================
 
-class QuestionOption(BaseModel):
-    """问卷选项"""
-    label: str = ""
-    value: str = ""
-    recommended: bool = False
-
-
-class QuestionItem(BaseModel):
-    """问卷问题 — LLM 发起交互式需求收集"""
-    id: str = ""
-    question: str = ""
-    type: str = "select"  # select / multi_select / input
-    options: list[QuestionOption] = []
-    placeholder: str = ""
-    required: bool = True
-
-
 class ChartItem(BaseModel):
     """单个图表配置"""
     title: str = ""
     pivot_config: PivotConfig
     chart_type: str = "bar"
+    analysis_goal: str = ""
+    metric_definition: str = ""
+    recommendation_reason: str = ""
+    assumptions: list[str] = []
 
 
 class AgentOutput(BaseModel):
-    """LLM 结构化输出"""
+    """LLM 结构化输出 — 图表生成"""
     intent: str
     reply: str
     charts: list[ChartItem] = []
     suggestions: list[str] = []
-    ask_questions: list[QuestionItem] = []
+    ask_questions: list[dict] = []
+
+
+# 看板问卷工具定义（LLM 调用此工具获取问卷，非结构化输出）
+QUESTIONNAIRE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "request_dashboard_questionnaire",
+        "description": "当用户想创建看板/数据大屏但需求不明确时调用此工具获取问卷，不要自行构造问卷。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reply": {
+                    "type": "string",
+                    "description": "回复用户的话，如'好的，我来帮您收集看板需求：'"
+                }
+            },
+            "required": ["reply"]
+        }
+    }
+}
+
+
+# ============================================================
+# 看板问卷构建工具
+# ============================================================
+
+def _build_dashboard_questionnaire() -> list[dict]:
+    """构建看板需求问卷（前端处理图表槽、规则/信号拖拽）"""
+    return [
+        {"id": "chart_count", "question": "需要展示多少个图表？", "type": "select", "options": [
+            {"label": "1个", "value": "1"}, {"label": "2个", "value": "2"}, {"label": "3个", "value": "3", "recommended": True},
+            {"label": "4个", "value": "4"}, {"label": "5个", "value": "5"}, {"label": "6个", "value": "6"}
+        ], "placeholder": "", "required": True},
+        {"id": "task_id", "question": "关联哪个任务？", "type": "select", "options_api": "/api/functions/tasks", "options": [], "placeholder": "", "required": True},
+        {"id": "rule_list", "question": "可用规则", "type": "rule_list", "options_api": "/api/functions/rules", "options": [], "placeholder": "", "required": False, "depends_on": "task_id"},
+        {"id": "signal_list", "question": "可用信号", "type": "signal_list", "options_api": "/api/functions/signals", "options": [], "placeholder": "", "required": False, "depends_on": ["task_id", "rule_list"]},
+        {"id": "chart_slots", "question": "图表配置", "type": "chart_slots", "options": [], "placeholder": "", "required": True, "depends_on": "chart_count"},
+    ]
 
 
 # ============================================================
@@ -80,20 +106,10 @@ class AgentOutput(BaseModel):
 _schema_cache: str | None = None
 _chart_system_prompt: str | None = None
 
-
-
-
-
-
-
-
-
-
-
 def _get_schema_text() -> str:
     global _schema_cache
     if _schema_cache is None:
-        _schema_cache = get_schema_for_agent(top_signals=60)
+        _schema_cache = get_schema_for_agent()
     return _schema_cache
 
 
@@ -109,62 +125,10 @@ def _get_chart_system_prompt() -> str:
 # Available Fields
 {schema}
 
-# Output Structure
-你输出的是 AgentOutput 结构体：
-- intent: "chart"
-- reply: 回复用户的文字
-- charts: 图表配置列表
-- suggestions: 建议用户追问的问题（3 个）
-- ask_questions: 需要用户进一步输入时的问卷列表（交互式需求收集）
-
-每个 chart 包含：
-- title: 图表标题
-- pivot_config: PivotConfig JSON
-- chart_type: 图表类型
-
-# Interactive Q&A (Ask Questions)
-当你需要向用户收集更多信息才能生成图表时，使用 ask_questions 字段。
-输出一个或多个 QuestionItem，每个包含：
-- id: 问题唯一标识（如 "chart_count"、"task_id"、"chart_direction"）
-- question: 向用户展示的问题文本
-- type: 交互类型（select=单选, multi_select=多选, input=文本输入）
-- options: select/multi_select 类型的选项列表
-- required: 是否必填
-
-## ask_questions 使用场景（非常重要）
-**规则：如果用户没有明确说出以下信息，必须先输出 ask_questions 收集，不能直接生成图表：**
-1. 用户说 "帮我创建一个看板"（没有提供具体图表）-> **必须**输出 ask_questions 询问：看板名称、图表数量、关联任务
-2. 用户说 "帮我分析一个报表"（没有说分析方向）-> **必须**输出 ask_questions 询问分析维度和图表类型
-3. 用户的需求明确（如 "各车型报警次数"）-> 不需要 ask_questions，直接输出 charts
-4. 用户提供了具体分析方向（如 "各车型报警次数和报警趋势"）-> 不需要 ask_questions，直接生成对应图表
-5. 用户消息包含 [问卷提交] 前缀 -> 这是用户回答了你的问题，**不要**再输出 ask_questions，直接生成图表
-
-## 示例
-用户："帮我创建一个看板"
-回复：
-  reply: "好的，我需要了解一些信息来创建看板："
-  ask_questions: [
-    {{
-      "id": "board_name", "question": "看板名称是什么？", "type": "input", "placeholder": "如：车辆违规监控看板", "required": true
-    }},
-    {{
-      "id": "chart_count", "question": "需要包含几个图表？", "type": "select", "options": [
-        {{"label": "2个", "value": "2"}}, {{"label": "3个", "value": "3", "recommended": true}},
-        {{"label": "4个", "value": "4"}}, {{"label": "5个", "value": "5"}}, {{"label": "6个", "value": "6"}}
-      ], "required": true
-    }},
-    {{
-      "id": "task_id", "question": "需要关联哪个任务？", "type": "select", "options": [
-        {{"label": "不关联任务", "value": "", "recommended": true}},
-        {{"label": "TASK_ID=1: xxx", "value": "1"}}, {{"label": "TASK_ID=2: xxx", "value": "2"}}
-      ], "required": false
-    }}
-  ]
-  charts: []  # 不输出图表
-  suggestions: []
-
-用户回答了问卷后，请根据用户提供的看板名称、图表数量等信息和用户之前说过的每张图表的具体方向，**直接生成合理的图表配置**。
-每个图表使用不同的分析维度和图表类型，确保多样性。
+# Rules
+- 需求明确时（用户说了具体分析维度、图表类型等）→ 直接生成 charts，必要时输出 ask_questions（至少1个问题）来收集缺失的关键信息，不要跳过需求确认直接猜测。
+- 用户消息包含 [问卷提交] 前缀 → 这是回答了之前的问卷，直接生成图表，不要再次输出 ask_questions。
+- 看板意图的用户没有提供具体图表方向时，ask_questions 输出至少3个问题以收集看板名称、图表数量、关联任务等信息。
 
 PivotConfig 核心 4 属性：
 1. filters → SQL WHERE（筛选器）
@@ -197,27 +161,7 @@ PivotConfig 核心 4 属性：
 - 所有 field 必须来自 Available Fields
 - 不确定或不认识的字段名 → 归类为动态信号列
 
-# Examples
-{{"intent": "chart", "reply": "各车型的报警次数如下：", "charts": [
-  {{ "title": "各车型报警次数", "pivot_config": {{ "filters": [], "axes": [{{"field": "vehicle_type", "alias": "车型"}}], "values": [{{"field": "alarm_time", "aggregation": "source", "alias": "报警次数"}}], "having": [], "limit": 1000 }}, "chart_type": "bar" }}
-]}}"""
-
-    # === 追加任务/规则上下文 ===
-    from core.chat_db import list_all_tasks, list_all_rules
-    try:
-        tasks = list_all_tasks(limit=60)
-        rules = list_all_rules(limit=120)
-        ext = ["\n## Available Tasks & Rules\n你可以根据用户需求，引用以下任务和规则来生成图表。\n"]
-        ext.append("### 任务列表\n")
-        for t in tasks:
-            ext.append(f"- TASK_ID={t['TASK_ID']}: {t.get('TASK_NAME', '')}\n")
-        ext.append("\n### 规则列表\n")
-        for r in rules:
-            ext.append(f"- RULE_ID={r['TASK_RULE_ID']}: {r.get('RULE_NAME', '')} (关联 TASK_ID={r.get('TASK_ID', '')})\n")
-        _chart_system_prompt += "".join(ext)
-    except Exception:
-        pass  # 如果外部数据表不存在，跳过
-
+"""
     return _chart_system_prompt
 
 
@@ -233,6 +177,8 @@ class ChartState(TypedDict):
     error: str | None
     analyze_retry_count: int
     validation_error: str | None
+    execute_retry_count: int
+    execution_error: str | None
 
     trace_collector: TraceCollector | None
     trace_span: SpanNode | None
@@ -240,6 +186,9 @@ class ChartState(TypedDict):
     # 交互式问卷相关
     ask_questions: list[dict[str, Any]]
     pending_step: str | None  # "awaiting_questions" / None
+
+    intent: str  # "chart" / "dashboard"
+    dashboard_draft: dict[str, Any] | None
 
 
 # ---- 工具函数 ----
@@ -255,11 +204,14 @@ def _get_fixed_names() -> set[str]:
     return _fixed_field_names
 
 
-def _deep_normalize_chart(chart: dict[str, Any]) -> dict[str, Any]:
+def _deep_normalize_chart(chart: dict[str, Any], parsed: ParsedChartRequest | None) -> dict[str, Any]:
     pc = chart.get("pivot_config")
     if not pc or not isinstance(pc, dict):
         return chart
-
+    if parsed:
+        pc["chart_type"] = parsed.explicit_chart_type or chart.get("chart_type", "bar")
+        chart["chart_type"] = pc["chart_type"]
+        pass
     fixed_names = _get_fixed_names()
 
     # filters 处理
@@ -321,14 +273,27 @@ def _deep_normalize_chart(chart: dict[str, Any]) -> dict[str, Any]:
     return chart
 
 
-def _normalize_charts_from_output(response: AgentOutput) -> list[dict[str, Any]]:
+def _normalize_charts_from_output(response: AgentOutput, parsedList: list[ParsedChartRequest]) -> list[dict[str, Any]]:
     if response.charts:
-        charts = [c.model_dump() for c in response.charts]
-        return [_deep_normalize_chart(ch) for ch in charts]
+        charts = enumerate([c.model_dump() for c in response.charts])
+        return [_deep_normalize_chart(ch, parsedList[i]) for i, ch in charts]
     return []
 
 
-
+def _dashboard_draft_prompt(draft: dict[str, Any]) -> str:
+    """将前端确认的结构化看板选择作为事实注入，不再从自由文本反解析。"""
+    parsed = DashboardRequestDraft.model_validate(draft)
+    slots = "\n".join(
+        f"- 图表{slot.index}：{slot.description or '由业务目标推荐'}；偏好图形：{slot.preferred_chart_type or '自动'}"
+        for slot in parsed.chart_slots
+    ) or "- 未填写图表槽位，请按业务目标补齐。"
+    return (
+        "## 已确认的看板草案（必须遵守）\n"
+        f"- 业务目标：{parsed.goal}\n- TASK_ID：{parsed.task_id}\n- 图表数量：{parsed.chart_count}\n"
+        f"- 已选规则 ID：{parsed.rule_ids}\n- 已选信号：{parsed.signal_names}\n"
+        f"- 时间范围：{parsed.time_range or '未指定'}\n- 图表槽位：\n{slots}\n"
+        "必须恰好生成所需数量的图表；图表不得重复，且共享的任务/时间范围保持一致。"
+    )
 
 
 def _validate_chart(chart: dict[str, Any]) -> str | None:
@@ -428,46 +393,55 @@ def analyze_node(state: ChartState) -> ChartState:
     sp: SpanNode | None = parent_span.add_child("analyze", "llm", input={"message": state["user_message"]}) if (tc and parent_span) else None
 
     # 强制问卷：看板意图但用户没有提供具体图表信息
-    _is_dashboard_but_vague = False
     _user_msg = state["user_message"]
-    _vague_keywords = ["创建一个看板", "新建看板", "帮我做一个看板", "帮忙创建一个看板", "建一个看板"]
-    _has_specific_chart = any(kw in _user_msg for kw in ["图表", "图", "柱状", "折线", "饼图", "趋势", "分布", "对比", "排名"])
-    if any(kw in _user_msg for kw in _vague_keywords) and not _has_specific_chart:
-        _is_dashboard_but_vague = True
-        logger.info("analyze_node: 检测到模糊看板请求，直接返回问券")
-        from core.chat_db import list_all_tasks
-        task_options = []
-        try:
-            tasks = list_all_tasks(limit=30)
-            task_options = [{"label": f"(TASK_ID={t['TASK_ID']}) {t.get('TASK_NAME', '')}", "value": str(t['TASK_ID'])} for t in tasks]
-        except Exception:
-            pass
+    _intent = state.get("intent", "chart")
+    _draft = state.get("dashboard_draft")
+    _has_specific_chart = any(kw in _user_msg for kw in [
+        "图表", "图", "柱状", "折线", "饼图", "雷达", "面积", "散点", "趋势", "分布", "对比", "排名",
+        "各", "按",  # 分组暗示（各车型、按任务）
+        "次数", "数量", "占比", "排行",  # 指标
+        "报警", "车型", "规则", "任务", "车辆", "驾驶", "速度", "时间",  # 业务字段提及
+    ])
+    is_vague_dashboard = (_intent == "dashboard" and not _has_specific_chart and not _draft)
+
+    if is_vague_dashboard:
+        logger.info("analyze_node: 检测到模糊看板请求（intent=%s），返回问卷", _intent)
 
         state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
         state["suggestions"] = []
         state["charts"] = []
-        state["ask_questions"] = [
-            {"id": "board_name", "question": "看板名称是什么？", "type": "input", "options": [], "placeholder": "如：车辆报警监控看板", "required": True},
-            {"id": "chart_count", "question": "需要包含几个图表？", "type": "select", "options": [
-                {"label": "2个", "value": "2"}, {"label": "3个", "value": "3", "recommended": True},
-                {"label": "4个", "value": "4"}, {"label": "5个", "value": "5"}, {"label": "6个", "value": "6"}
-            ], "placeholder": "", "required": True},
-            {"id": "task_id", "question": "需要关联哪个任务？", "type": "select", "options": [
-                {"label": "不关联任务", "value": "", "recommended": True},
-            ] + task_options, "placeholder": "", "required": False},
-        ]
+        state["ask_questions"] = _build_dashboard_questionnaire()
         state["pending_step"] = "awaiting_questions"
+        # 清除可能的校验错误（防止 retry 循环覆盖问卷回复）
+        state["validation_error"] = None
+        state["analyze_retry_count"] = 0
         if sp:
             sp.finish(output={"reply": state["reply"], "ask_questions": len(state["ask_questions"])})
         return state
 
     try:
-        structured_llm = get_structured_llm(AgentOutput)
         system_parts = [_get_chart_system_prompt()]
+        parsedList = []
+        # 预处理用户输入 → 结构化中间语言注入 prompt，帮助 LLM 准确理解需求
+        if not _draft:
+            parsed = preprocess_chart_query(state["user_message"])
+            parsed_text = parsed.to_prompt_section()
+            parsedList.append(parsed)
+            if parsed_text:
+                system_parts.append(parsed_text)
+
+        if _draft:
+            system_parts.append(_dashboard_draft_prompt(_draft))
+            system_parts.append(dashboard_plan_prompt(DashboardRequestDraft.model_validate(_draft)))
 
         if state.get("analyze_retry_count", 0) > 0 and state.get("validation_error"):
             system_parts.append(
                 f"注意：上一次生成的配置在校验中未通过，请根据以下反馈修正：\n{state['validation_error']}\n请重新生成符合要求的配置。"
+            )
+        if state.get("execute_retry_count", 0) > 0 and state.get("execution_error"):
+            system_parts.append(
+                f"注意：上一版配置已通过结构校验，但执行查询失败。请根据以下已脱敏反馈重建完整配置：\n"
+                f"{state['execution_error']}\n不要复用导致失败的字段、聚合或筛选。"
             )
 
         base_system = "\n\n".join(system_parts)
@@ -477,20 +451,10 @@ def analyze_node(state: ChartState) -> ChartState:
             messages.append(h)
         messages.append({"role": "user", "content": state["user_message"]})
 
-        response: AgentOutput | None = None
-        if structured_llm is not None:
-            try:
-                response = structured_llm.invoke(messages)
-                if sp:
-                    sp.messages = list(messages)
-                    sp.tokens = {"input": -1, "output": -1}
-                    sp.output = response.model_dump()
-
-            except Exception:
-                logger.warning("StructuredOutput 调用失败，使用 PydanticOutputParser 兜底")
-                response = None
+        response = call_structured(AgentOutput, messages)
 
         if response is None:
+            # 回退：PydanticOutputParser + try_parse_json 手动解析
             parser = PydanticOutputParser(pydantic_object=AgentOutput)
             format_instructions = parser.get_format_instructions()
             fallback_messages = [{"role": "system", "content": f"{base_system}\n\n## 输出格式\n{format_instructions}"}]
@@ -498,13 +462,11 @@ def analyze_node(state: ChartState) -> ChartState:
                 fallback_messages.append(h)
             fallback_messages.append({"role": "user", "content": state["user_message"]})
             raw_llm = get_llm()
-            raw_resp = raw_llm.invoke(fallback_messages)
-            raw_content = raw_resp.content.strip()
-
+            raw_resp2 = raw_llm.invoke(fallback_messages)
+            raw_content = raw_resp2.content.strip()
             try:
                 response = parser.parse(raw_content)
             except Exception as parse_err:
-                logger.error("PydanticOutputParser 解析失败: %s", parse_err)
                 result = try_parse_json(raw_content)
                 response = AgentOutput(
                     intent="chart",
@@ -513,17 +475,23 @@ def analyze_node(state: ChartState) -> ChartState:
                     suggestions=result.get("suggestions", []),
                 )
 
-            if sp:
-                sp.messages = list(fallback_messages)
-                sp.tokens = {"input": -1, "output": -1}
-                sp.output = response.model_dump()
-
+        if sp:
+            sp.messages = list(messages)
+            sp.tokens = {"input": -1, "output": -1}
+            sp.output = response.model_dump()
+        # print(response)
         state["reply"] = response.reply
         state["suggestions"] = response.suggestions or []
-        state["charts"] = _normalize_charts_from_output(response)
-        state["ask_questions"] = [q.model_dump() for q in (response.ask_questions or [])]
-        state["pending_step"] = "awaiting_questions" if response.ask_questions else None
+        state["charts"] = _normalize_charts_from_output(response, parsedList)
 
+        # 如果 LLM 输出了 ask_questions → 用固定问卷填充，进入问卷模式
+        if response.ask_questions:
+            state["ask_questions"] = _build_dashboard_questionnaire()
+            state["pending_step"] = "awaiting_questions"
+            state["charts"] = []
+            state["suggestions"] = []
+            state["validation_error"] = None
+            state["analyze_retry_count"] = 0
 
     except Exception as e:
         logger.error("Agent 分析失败: %s", e, exc_info=True)
@@ -546,9 +514,20 @@ def validate_config_node(state: ChartState) -> ChartState:
     parent_span: SpanNode | None = state.get("trace_span")
     sp = parent_span.add_child("validate", "chain", input={"chart_count": len(state.get("charts", []))}) if (tc and parent_span) else None
 
+    # 问卷模式：跳过校验，直接返回（charts 必然为空，校验必失败）
+    if state.get("pending_step") == "awaiting_questions":
+        if sp:
+            sp.finish(output={"skipped": True, "reason": "问卷模式，跳过配置校验"})
+        return state
+
     # trace_log 已废弃，日志由 TraceCollector 管理
 
     err = _validate_charts(state["charts"])
+    draft = state.get("dashboard_draft")
+    if err is None and draft:
+        expected_count = DashboardRequestDraft.model_validate(draft).chart_count
+        if len(state["charts"]) != expected_count:
+            err = f"看板草案要求生成 {expected_count} 个图表，实际生成 {len(state['charts'])} 个"
     if err is None:
         state["validation_error"] = None
 
@@ -591,18 +570,16 @@ def execute_node(state: ChartState) -> ChartState:
     api_outputs = []
     for chart in charts:
         pc_dict = chart.get("pivot_config") or chart.get("config")
-        ct = chart.get("chart_type", "bar")
         if not pc_dict:
             chart["error"] = "缺少 pivot_config"
             errors.append("缺少 pivot_config")
             continue
-
-        pc_dict["chart_type"] = ct
         try:
             cfg = PivotConfig(**pc_dict)
             api_inputs.append(cfg.model_dump())
             res = _pivot_via_http(cfg)
             chart["data"] = res.get("data", [])
+            chart["chart_type"] = pc_dict.get("chart_type", "bar")
             chart["vega_spec"] = res.get("vega_spec", {})
             chart["sql"] = res.get("sql")
             chart["error"] = None
@@ -621,6 +598,7 @@ def execute_node(state: ChartState) -> ChartState:
             errors.append(friendly_msg)
 
     succeed_count = len(charts) - len(errors)
+    state["execution_error"] = "；".join(errors) if errors else None
     if sp:
         sp.input = {"api_requests": api_inputs} if api_inputs else {"chart_count": len(charts)}
         sp.finish(
@@ -632,6 +610,14 @@ def execute_node(state: ChartState) -> ChartState:
             error="; ".join(errors) if errors else None
         )
     return state
+
+
+def repair_after_execute_node(state: ChartState) -> ChartState:
+    """仅在全部图表执行失败时进行一次定向重建，避免无界重试。"""
+    state["execute_retry_count"] = state.get("execute_retry_count", 0) + 1
+    state["charts"] = []
+    state["reply"] = "查询配置需要根据数据源反馈调整，正在生成一次修复方案。"
+    return analyze_node(state)
 
 
 def format_reply_node(state: ChartState) -> ChartState:
@@ -692,12 +678,16 @@ def build_chart_agent() -> Any:
     workflow.add_node("analyze", analyze_node)
     workflow.add_node("validate", validate_config_node)
     workflow.add_node("execute", execute_node)
+    workflow.add_node("repair_after_execute", repair_after_execute_node)
     workflow.add_node("format_reply", format_reply_node)
 
     workflow.set_entry_point("analyze")
     workflow.add_edge("analyze", "validate")
 
     def route_after_validate(state: ChartState) -> str:
+        # 问卷模式：直接去 format_reply，不再校验
+        if state.get("pending_step") == "awaiting_questions":
+            return "format_reply"
         if state.get("validation_error") and state.get("analyze_retry_count", 0) > 0:
             return "analyze"
         if state.get("validation_error"):
@@ -712,13 +702,30 @@ def build_chart_agent() -> Any:
         "format_reply": "format_reply",
     })
 
-    workflow.add_edge("execute", "format_reply")
+    def route_after_execute(state: ChartState) -> str:
+        charts = state.get("charts", []) or []
+        all_failed = bool(charts) and all(chart.get("error") for chart in charts)
+        if all_failed and state.get("execute_retry_count", 0) < 1:
+            return "repair_after_execute"
+        return "format_reply"
+
+    workflow.add_conditional_edges("execute", route_after_execute, {
+        "repair_after_execute": "repair_after_execute",
+        "format_reply": "format_reply",
+    })
+    workflow.add_edge("repair_after_execute", "validate")
     workflow.add_edge("format_reply", END)
 
     return workflow.compile()
 
 
-async def process_chart(message: str, history: list[dict[str, str]] | None = None, session_id: str | None = None) -> dict[str, Any]:
+async def process_chart(
+    message: str,
+    history: list[dict[str, str]] | None = None,
+    session_id: str | None = None,
+    intent: str = "chart",
+    dashboard_draft: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """处理图表分析请求"""
     import uuid
     import time
@@ -744,8 +751,12 @@ async def process_chart(message: str, history: list[dict[str, str]] | None = Non
         "error": None,
         "analyze_retry_count": 0,
         "validation_error": None,
+        "execute_retry_count": 0,
+        "execution_error": None,
         "trace_collector": tc,
         "trace_span": tc.root,
+        "intent": "dashboard" if dashboard_draft else intent,
+        "dashboard_draft": dashboard_draft,
     }
 
     config = {"configurable": {"thread_id": thread_id}}

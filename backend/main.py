@@ -70,7 +70,9 @@ from routers.api_auth import router as auth_router
 from routers.api_sessions import router as sessions_router
 from routers.api_boards import router as boards_router
 from routers.api_monitor import router as monitor_router
+from routers.api_functions import router as functions_router
 app.include_router(chat_router)
+app.include_router(functions_router)
 app.include_router(admin_router)
 app.include_router(charts_router)
 app.include_router(recommend_router)

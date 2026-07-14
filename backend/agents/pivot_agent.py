@@ -14,16 +14,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from agents.llm_utils import (
-    is_private_provider,
     get_llm,
     get_structured_llm,
     try_parse_json,
@@ -129,7 +126,13 @@ def _recognize_intent(message: str, history: list[dict[str, str]] | None = None)
 # 主入口
 # ============================================================
 
-async def process_chat(message: str, history: list[dict[str, str]] | None = None, session_id: str | None = None) -> dict[str, Any]:
+async def process_chat(
+    message: str,
+    history: list[dict[str, str]] | None = None,
+    session_id: str | None = None,
+    task_id: int | None = None,
+    dashboard_draft: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """处理聊天请求 — 意图识别后分发到子 Agent
 
     Args:
@@ -141,36 +144,19 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     """
     start = time.time()
 
-    # 检查认证配置
-    if is_private_provider():
-        if not os.getenv("PRIVATE_LLM_CLIENT_ID") or not os.getenv("PRIVATE_LLM_TOKEN_URL"):
-            return {
-                "reply": "私有 LLM 需要配置 PRIVATE_LLM_CLIENT_ID / PRIVATE_LLM_TOKEN_URL 环境变量",
-                "charts": [],
-                "suggestions": [],
-                "rules": [],
-                "execution_time_ms": 0,
-            }
-    elif not os.getenv("OPENAI_API_KEY"):
-        return {
-            "reply": "AI 对话需要配置 OPENAI_API_KEY 环境变量，请先在 .env 文件中设置。",
-            "charts": [],
-            "suggestions": [],
-            "rules": [],
-            "execution_time_ms": 0,
-        }
-
     # 1. 意图识别
     intent, reason = _recognize_intent(message, history)
     logger.info("意图识别: %s (%s)", intent, reason)
 
-    # 2. 分发到子 Agent（传入 session_id 供 trace 采集）
+    # 2. 分发到子 Agent（传入 session_id 供 trace 采集，传入 intent 供 analyze_node 判断）
     if intent == "chart" or intent == "dashboard":
         from agents.chart_agent import process_chart as chart_process
-        result = await chart_process(message, history, session_id=session_id)
+        result = await chart_process(
+            message, history, session_id=session_id, intent=intent, dashboard_draft=dashboard_draft,
+        )
     elif intent == "rule":
         from agents.rule_agent import process_rule as rule_process
-        result = await rule_process(message, history, session_id=session_id)
+        result = await rule_process(message, history, session_id=session_id, task_id=task_id)
     else:  # chat
         from agents.chat_agent import process_chat as chat_process
         result = await chat_process(message, history, session_id=session_id)
@@ -178,4 +164,3 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
     elapsed = (time.time() - start) * 1000
     result["execution_time_ms"] = round(elapsed, 2)
     return result
-

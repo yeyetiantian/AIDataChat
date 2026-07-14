@@ -46,6 +46,9 @@ class MessageResponse(BaseModel):
     content: str
     charts: list = []
     suggestions: list = []
+    rules: list = []
+    ask_questions: list = []
+    pending_step: str | None = None
     created_at: str = ""
 
 

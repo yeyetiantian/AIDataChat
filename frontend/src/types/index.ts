@@ -146,8 +146,10 @@ export interface ChatMessage {
   pivot_config?: PivotConfig
   charts?: any[]
   suggestions?: string[]
+  rules?: any[]
   ask_questions?: any[]
   pending_step?: string | null
+  dashboard_draft_id?: string
 }
 
 /** 四象限拖拽区域类型 */

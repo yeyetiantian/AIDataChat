@@ -6,17 +6,6 @@
         <span class="app-logo">📊</span>
         <h1>柔性报表</h1>
         <div class="header-board-divider"></div>
-        <button
-          type="button"
-          class="header-action-button header-action-button--ai"
-          title="AI 分析"
-          @click="showAiDialog = true"
-        >
-          <span class="header-action-icon">
-            <el-icon :size="15"><ChatDotRound /></el-icon>
-          </span>
-          <span>AI 分析</span>
-        </button>
 
         <button
           type="button"
@@ -62,23 +51,19 @@
 
         <!-- 用户显示（始终可见） -->
         <button
-          v-if="enableUserSwitch"
           type="button"
           class="header-user-btn"
           @click="userOpen=!userOpen"
           title="切换用户"
+          :disabled="!showMonitor"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           <span class="header-user-name">{{ chatStore.user?.username || '用户' }}</span>
         </button>
-        <span v-else class="header-user-badge">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          <span class="header-user-name">{{ chatStore.user?.username || '用户' }}</span>
-        </span>
 
         <!-- 用户切换下拉（仅 check_user=true 时显示） -->
-        <div v-if="enableUserSwitch && userOpen" class="user-dropdown-overlay" @click="userOpen=false"></div>
-        <div v-if="enableUserSwitch" class="user-dropdown" :class="{ 'is-open': userOpen }">
+        <div v-if="showMonitor && userOpen" class="user-dropdown-overlay" @click="userOpen=false"></div>
+        <div v-if="showMonitor" class="user-dropdown" :class="{ 'is-open': userOpen }">
           <div v-for="u in userList" :key="u.id" class="ud-item" :class="{ active: u.username === chatStore.user?.username }" @click="handleSwitchUser(u)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             <span>{{ u.username }}</span>
@@ -102,6 +87,16 @@
       </div>
     </Teleport>
 
+    <!-- 浮动 AI 按钮（右下角圆形） -->
+    <button
+      type="button"
+      class="ai-float-btn"
+      title="AI 分析"
+      @click="showAiDialog = true"
+    >
+      <el-icon :size="24"><MagicStick /></el-icon>
+    </button>
+
     <!-- AI 对话弹窗 -->
     <el-dialog v-model="showAiDialog" top="5vh" destroy-on-close :show-close="false" class="ai-full-dialog">
       <AIDialog @close="showAiDialog = false" />
@@ -122,7 +117,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChatStore } from '@/stores/useChatStore'
 import { useBoardStore } from '@/stores/useBoardStore'
 import AIDialog from '@/components/AIDialog.vue'
-import { ChatDotRound, Collection } from '@element-plus/icons-vue'
+import { MagicStick, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
@@ -214,19 +209,10 @@ const showAiDialog = ref(false)
 
 const userOpen = ref(false)
 const userList = computed(() => chatStore.userList)
-const enableUserSwitch = (() => {
-  try { return new URLSearchParams(window.location.hash.split('?')[1] || '').get('check_user') === 'true' } catch { return false }
-})()
 
 /* 监控面板仅在 URL 带 mt=1 时可见（支持 hash query 和 full query） */
 const showMonitor = computed(() => {
-  try {
-    const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '')
-    if (hashParams.get('mt') === '1') return true
-    const fullParams = new URLSearchParams(window.location.search)
-    if (fullParams.get('mt') === '1') return true
-  } catch { /* ignore */ }
-  return false
+  return import.meta.env.MODE === 'lock'
 })
 
 async function handleSwitchUser(u: {id:number;username:string;role:string}) {
@@ -421,36 +407,49 @@ html, body, #app {
   box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
 }
 
-.header-action-button--ai {
-  border-color: #d7e8d0;
-  color: #2f7d32;
-  background: #f3faf1;
+/* 浮动 AI 按钮 */
+.ai-float-btn {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease;
 }
 
-.header-action-button--ai:hover {
-  background: #e8f6e4;
-  border-color: #bfe0b4;
-  box-shadow: 0 4px 10px rgba(47, 125, 50, 0.12);
+.ai-float-btn:hover {
+  transform: translateY(-3px) scale(1.06);
+  box-shadow: 0 10px 30px rgba(99, 102, 241, 0.55);
 }
 
-.header-action-button--ai:focus-visible {
-  box-shadow: 0 0 0 3px rgba(47, 125, 50, 0.16);
+.ai-float-btn:active {
+  transform: scale(0.92);
 }
 
-.header-action-button--danger {
-  border-color: #f3c4c4;
-  color: #d14343;
-  background: #fff5f5;
+.ai-float-btn::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 0.3s;
 }
 
-.header-action-button--danger:hover {
-  background: #ffeaea;
-  border-color: #e9aaaa;
-  box-shadow: 0 4px 10px rgba(209, 67, 67, 0.12);
-}
-
-.header-action-button--danger:focus-visible {
-  box-shadow: 0 0 0 3px rgba(209, 67, 67, 0.18);
+.ai-float-btn:hover::after {
+  opacity: 0.25;
+  filter: blur(8px);
 }
 
 .app-body {

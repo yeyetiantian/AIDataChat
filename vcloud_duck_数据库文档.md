@@ -161,7 +161,7 @@
 | 21 | RBF_AFTER_TIME | DECIMAL(18,3) | RBF 截取后时间（秒） |
 | 22 | RULE_SIGNALS | VARCHAR | 规则关联信号列表 |
 | 23 | OTHER_SIGNALS | VARCHAR | 其他信号列表 |
-
+ 
 ---
 
 ### 3.5 `TM_RMU_PS_TASK_VEHICLE` — 任务关联车辆

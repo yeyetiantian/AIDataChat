@@ -20,8 +20,9 @@ from core.chat_db import (
     get_session,
     create_session,
     update_session_title,
+    save_agent_draft,
 )
-from models import ChatResponse
+from models import ChatResponse, DashboardRequestDraft
 
 logger = logging.getLogger("api_chat")
 
@@ -32,6 +33,8 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="用户输入")
     session_id: Optional[str] = Field(None, description="会话 ID，首次不传自动生成")
     user_id: Optional[int] = Field(None, description="用户 ID，不传则使用内存模式")
+    task_id: Optional[int] = Field(None, description="规则配置推荐可选任务 ID")
+    dashboard_draft: Optional[DashboardRequestDraft] = Field(None, description="结构化看板问卷草案")
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -66,8 +69,19 @@ async def chat_query(request: ChatRequest):
             # 无 user_id 时使用空历史
             history = []
 
+        dashboard_draft = request.dashboard_draft
+        dashboard_draft_id = ""
+        if dashboard_draft is not None:
+            dashboard_draft_id = save_agent_draft(
+                session_id, "dashboard", dashboard_draft.model_dump(mode="json"), dashboard_draft.draft_id,
+            )
+            dashboard_draft.draft_id = dashboard_draft_id
+
         # 调用 Agent（传入 session_id 用于 trace 关联）
-        result = await process_chat(request.message, history, session_id=session_id)
+        result = await process_chat(
+            request.message, history, session_id=session_id, task_id=request.task_id,
+            dashboard_draft=dashboard_draft.model_dump(mode="json") if dashboard_draft else None,
+        )
 
         # 保存用户消息和 AI 回复
         reply = result.get("reply", "")
@@ -81,7 +95,10 @@ async def chat_query(request: ChatRequest):
             user_msg_total = user_msg_count + 1
 
             add_message(session_id, "user", request.message)
-            add_message(session_id, "assistant", reply, charts, suggestions)
+            add_message(session_id, "assistant", reply, charts, suggestions,
+                        ask_questions=result.get("ask_questions", []),
+                        pending_step=result.get("pending_step"),
+                        rules=result.get("rules", []))
 
             # 如果这是第一条用户消息，自动设置标题
             if user_msg_total == 1:
@@ -102,6 +119,7 @@ async def chat_query(request: ChatRequest):
             execution_time_ms=result.get("execution_time_ms", 0),
             ask_questions=result.get("ask_questions", []) or [],
             pending_step=result.get("pending_step"),
+            dashboard_draft_id=dashboard_draft_id,
         )
     except Exception as e:
         logger.error("聊天分析失败: %s", e, exc_info=True)

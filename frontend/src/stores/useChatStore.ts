@@ -9,8 +9,10 @@ export interface ChatMessage {
   content: string
   charts?: Record<string, any>[] | null
   suggestions?: string[]
+  rules?: Record<string, any>[]
   ask_questions?: any[]
   pending_step?: string | null
+  dashboard_draft_id?: string
 }
 
 export interface ChatSession {
@@ -146,6 +148,10 @@ export const useChatStore = defineStore('chat', () => {
             content: m.content,
             charts: m.charts || null,
             suggestions: m.suggestions || [],
+            rules: m.rules || [],
+            ask_questions: m.ask_questions || [],
+            pending_step: m.pending_step || null,
+            dashboard_draft_id: m.dashboard_draft_id || '',
           }))
         }
       }
@@ -188,7 +194,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(msg: string) {
+  async function sendMessage(msg: string, options?: { dashboardDraft?: Record<string, any> }) {
     if (!msg.trim() || loading.value) return
     loading.value = true
 
@@ -211,6 +217,7 @@ export const useChatStore = defineStore('chat', () => {
           message: msg,
           session_id: session.id,
           user_id: user.value?.id,
+          dashboard_draft: options?.dashboardDraft,
         }),
       })
       if (!resp.ok) throw new Error('AI 分析失败')
@@ -223,8 +230,10 @@ export const useChatStore = defineStore('chat', () => {
         content: reply,
         charts: charts || null,
         suggestions: data.suggestions || [],
+        rules: data.rules || [],
         ask_questions: data.ask_questions || [],
         pending_step: data.pending_step || null,
+        dashboard_draft_id: data.dashboard_draft_id || '',
       })
     } catch (e: any) {
       session.messages.push({

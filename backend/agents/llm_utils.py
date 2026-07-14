@@ -28,6 +28,16 @@ def is_private_provider() -> bool:
     return os.getenv("LLM_PROVIDER", "openai").strip().lower() == "private"
 
 
+def check_llm_config() -> str | None:
+    """检查 LLM 配置是否完整，不完整则返回错误提示"""
+    if is_private_provider():
+        if not os.getenv("PRIVATE_LLM_CLIENT_ID") or not os.getenv("PRIVATE_LLM_TOKEN_URL"):
+            return "私有 LLM 需要配置 PRIVATE_LLM_CLIENT_ID / PRIVATE_LLM_TOKEN_URL 环境变量"
+    elif not os.getenv("OPENAI_API_KEY"):
+        return "AI 对话需要配置 OPENAI_API_KEY 环境变量，请先在 .env 文件中设置。"
+    return None
+
+
 # ============================================================
 # 全局 LLM 缓存（进程级别）
 # ============================================================
@@ -41,6 +51,10 @@ def get_llm() -> Any:
     global _llm_instance
     if _llm_instance is not None:
         return _llm_instance
+
+    err = check_llm_config()
+    if err:
+        raise RuntimeError(err)
 
     from langchain_openai import ChatOpenAI
 
@@ -113,17 +127,29 @@ def call_llm_text(messages: list[dict]) -> str:
 # ============================================================
 
 def try_parse_json(text: str) -> dict | None:
-    """尝试解析 JSON，自动处理 LLM 输出的双花括号"""
+    """尝试解析 JSON，自动处理 LLM 输出的 Markdown 代码块包裹和双花括号"""
     if not text:
         return None
+
+    # 去掉 Markdown 代码块包裹（```json ... ```）
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        first_nl = cleaned.find("\n")
+        if first_nl != -1:
+            cleaned = cleaned[first_nl:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
-    cleaned = text.replace("{{", "{").replace("}}", "}")
-    if cleaned != text:
+
+    # 处理 LLM 转义产生的双花括号
+    double_braced = cleaned.replace("{{", "{").replace("}}", "}")
+    if double_braced != cleaned:
         try:
-            return json.loads(cleaned)
+            return json.loads(double_braced)
         except json.JSONDecodeError:
             pass
     return None
@@ -227,9 +253,6 @@ class SpanNode:
 
     def to_json(self) -> str:
         return json_lib.dumps(self.to_dict(), ensure_ascii=False, default=str)
-
-
-
 
 class TraceCollector:
     """全链路 Trace 采集器

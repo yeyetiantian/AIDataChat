@@ -102,7 +102,7 @@ def get_schema_markdown() -> str:
     return "\n".join(lines)
 
 
-def get_schema_for_agent(top_signals: int = 60) -> str:
+def get_schema_for_agent() -> str:
     """生成给 LLM 的 Schema 描述"""
     fields = _get_all_fields()
     fixed = [f for f in fields if f.get("fixed")]
