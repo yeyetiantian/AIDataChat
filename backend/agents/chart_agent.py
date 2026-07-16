@@ -163,6 +163,8 @@ def _deep_normalize_chart(chart: dict[str, Any], parsed: ParsedChartRequest | No
     if parsed:
         pc["chart_type"] = parsed.explicit_chart_type or chart.get("chart_type", "")
         chart["chart_type"] = pc["chart_type"]
+        if not parsed.legend_field:
+            pc["legend"] = []
     fixed_names = _get_fixed_names()
 
     # filters 处理
