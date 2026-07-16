@@ -112,7 +112,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChatStore } from '@/stores/useChatStore'
 import { useBoardStore } from '@/stores/useBoardStore'
@@ -120,14 +120,7 @@ import AIDialog from '@/components/AIDialog.vue'
 import { MagicStick, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
-
-async function dispatchBoardEvent(eventName: 'board:mock-data' | 'board:clear-all' | 'board:toggle-ai') {
-  if (router.currentRoute.value.path !== '/board') {
-    await router.push('/board')
-    await nextTick()
-  }
-  window.dispatchEvent(new CustomEvent(eventName))
-}
+const route = useRoute()
 
 function handleMockBoardData() {
   if (router.currentRoute.value.path !== '/board') {
@@ -212,7 +205,7 @@ const userList = computed(() => chatStore.userList)
 
 /* 监控面板仅在 URL 带 mt=1 时可见（支持 hash query 和 full query） */
 const showMonitor = computed(() => {
-  return import.meta.env.MODE === 'lock'
+  return route?.query?.m || import.meta.env.MODE === 'lock'
 })
 
 async function handleSwitchUser(u: {id:number;username:string;role:string}) {

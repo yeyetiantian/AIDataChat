@@ -4,15 +4,15 @@
     <div class="ask-item">
       <div class="ask-label">需要展示多少个图表？</div>
       <el-select v-model="chartCount" style="width:100%" @change="onChartCountChange">
-        <el-option v-for="n in 6" :key="n" :label="n + '个'" :value="n"
-          ><span v-if="n===3">⭐ </span>{{ n }}个</el-option
+        <el-option v-for="n in 4" :key="n" :label="(2 + n) + '个'" :value="2 + n"
+          ><span v-if="2+n===6">⭐ </span>{{ 2 + n }}个</el-option
         >
       </el-select>
     </div>
 
     <!-- 任务选择 -->
     <div class="ask-item">
-      <div class="ask-label">关联哪个任务？</div>
+      <div class="ask-label">关联哪个任务？（任务变更会随机重置信号[]中的信号）</div>
       <el-select
         v-model="taskId"
         filterable
@@ -39,9 +39,7 @@
             v-for="r in ruleOptions"
             :key="r.value"
             class="ref-tag ref-tag-rule"
-            :class="{ selected: selectedRuleIds.includes(r.value) }"
             draggable="true"
-            @click="toggleRule(r.value)"
             @dragstart="onDragStart($event, 'rule', r)"
           >
             {{ r.label }}
@@ -58,9 +56,7 @@
             v-for="s in signalOptions"
             :key="s.value"
             class="ref-tag ref-tag-signal"
-            :class="{ selected: selectedSignalNames.includes(s.value) }"
             draggable="true"
-            @click="toggleSignal(s.value)"
             @dragstart="onDragStart($event, 'signal', s)"
           >
             {{ s.label }}
@@ -68,7 +64,20 @@
         </div>
       </div>
     </template>
-
+     <!-- 时间范围选择 -->
+    <div class="ask-item">
+      <div class="ask-label">需要什么时间范围？</div>
+      <el-date-picker
+        v-model="dateRange"
+        type="datetimerange"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD HH:mm:ss"
+        style="width:100%"
+      />
+    </div>
+      
     <!-- 图表配置槽（Tab 切换） -->
     <template v-if="chartCount > 0">
       <div class="ask-item">
@@ -94,7 +103,7 @@
                 v-model="slot.dimension"
                 class="slot-textarea"
                 placeholder="描述图表维度，或将规则/信号拖入此处插入文本中"
-                rows="4"
+                rows="3"
               />
             </div>
           </div>
@@ -117,9 +126,7 @@ import { ref, computed, watch } from 'vue'
 interface OptionItem {
   label: string
   value: string
-  ext_task_id?: string | null
-  ext_rule_ids?: number[]
-  ext_task_ids?: number[]
+  name?: string
 }
 
 interface ChartSlot {
@@ -127,12 +134,22 @@ interface ChartSlot {
 }
 
 const emit = defineEmits<{
-  submit: [answers: Record<string, any>]
+  submit: [msg: Record<string, any>]
   cancel: []
 }>()
 
+const DEFAULT_SLOT_MAP = [
+  '生成饼图，分析规则产生报警的数量占比',
+  '生成柱状图，统计每日报警数量，不同报警规则对应不同图例，X轴日期，Y轴报警时间计数',
+  '生成雷达图，对比维度包括[平均值，最大值，最小值]，Y轴信号[]，X轴为规则，不要指定图例',
+  '生成散点图，统计X轴信号[]与Y轴信号[]的报警值做对比',
+  '生成面积图，Y轴信号[]，X轴报警时间，不指定图例，',
+  '生成折线图，Y轴信号[]，X轴报警时间计数，不指定图例，'
+]
+
 // Chart count
-const chartCount = ref(3)
+const chartCount = ref(6)
+const dateRange = ref<[String | null, String | null] | null>(['2025-08-29 00:00:00', '2025-09-04 23:59:59'])
 
 // Task
 const taskId = ref('')
@@ -149,6 +166,7 @@ async function loadTasks(keyword: string = '') {
       const data = await r.json()
       taskOptions.value = data.map((t: any) => ({
         label: `${t.TASK_NAME}(${t.TASK_ID})`,
+        name: t.TASK_NAME,  
         value: String(t.TASK_ID),
       }))
     }
@@ -164,7 +182,6 @@ function onTaskSearch(query: string) {
 // Rules
 const ruleOptions = ref<OptionItem[]>([])
 const ruleLoading = ref(false)
-const selectedRuleIds = ref<string[]>([])
 
 async function loadRules() {
   if (!taskId.value) return
@@ -176,7 +193,6 @@ async function loadRules() {
       ruleOptions.value = data.map((item: any) => ({
         label: item.RULE_NAME,
         value: String(item.TASK_RULE_ID),
-        ext_task_id: item.TASK_ID ? String(item.TASK_ID) : null,
       }))
     }
   } catch {}
@@ -186,19 +202,6 @@ async function loadRules() {
 // Signals
 const signalOptions = ref<OptionItem[]>([])
 const signalLoading = ref(false)
-const selectedSignalNames = ref<string[]>([])
-
-function toggleRule(value: string) {
-  selectedRuleIds.value = selectedRuleIds.value.includes(value)
-    ? selectedRuleIds.value.filter(item => item !== value)
-    : [...selectedRuleIds.value, value]
-}
-
-function toggleSignal(value: string) {
-  selectedSignalNames.value = selectedSignalNames.value.includes(value)
-    ? selectedSignalNames.value.filter(item => item !== value)
-    : [...selectedSignalNames.value, value]
-}
 
 async function loadSignals() {
   if (!taskId.value) return
@@ -210,9 +213,12 @@ async function loadSignals() {
       signalOptions.value = data.map((s: any) => ({
         label: `${s.signal_name}`,
         value: s.signal_name,
-        ext_rule_ids: s.rule_ids || [],
-        ext_task_ids: s.task_ids || [],
       }))
+      chartSlots.value.forEach((x) => {
+        if (x.dimension){ 
+          x.dimension = randomSingle(x.dimension)
+        }
+      })
     }
   } catch {}
   signalLoading.value = false
@@ -227,8 +233,32 @@ function onTaskChange() {
     ruleOptions.value = []
     signalOptions.value = []
   }
-  selectedRuleIds.value = []
-  selectedSignalNames.value = []
+}
+const randomSingle = (templateStr: string): string => {
+  if (signalOptions.value.length < 1) return templateStr
+  const allLabels = signalOptions.value.map(item => item.label);
+  const getRandomLabels = (n: number) => {
+    const copy = [...allLabels];
+    const takeNum = Math.min(n, copy.length);
+    const result: string[] = [];
+    for (let i = 0; i < takeNum; i++) {
+        const randomIdx = Math.floor(Math.random() * copy.length);
+        result.push(copy.splice(randomIdx, 1)[0]);
+    }
+    return result.join(',');
+  }
+  const getNum = () => {
+    if (templateStr.includes('雷达图')) return 5
+    if (templateStr.includes('散点图')) return 1
+    if (templateStr.includes('区域图')) return 5
+    if (templateStr.includes('折线图')) return 6
+    return 0
+  }
+  const num = getNum()
+  if (num === 0) return templateStr
+  return templateStr.replace(/(信号\s*)\[(.*?)\]/g, (match, prefix) => {
+    return `${prefix}[${getRandomLabels(num)}]`
+  })
 }
 
 // Chart slots
@@ -248,6 +278,11 @@ function onChartCountChange() {
   if (parseInt(activeChartTab.value) >= n) {
     activeChartTab.value = String(n - 1)
   }
+  chartSlots.value.forEach((x, i) => {
+    if (!x.dimension){ 
+      x.dimension = randomSingle(DEFAULT_SLOT_MAP[i])
+    }
+  })
 }
 
 // Initialize
@@ -258,7 +293,7 @@ loadTasks()
 let dragInsertText = ''
 
 function onDragStart(e: DragEvent, type: string, item: OptionItem) {
-  dragInsertText = `「${item.label}」`
+  dragInsertText = `${item.label}`
   e.dataTransfer?.setData('text/plain', dragInsertText)
 }
 
@@ -295,18 +330,40 @@ const allRequiredFilled = computed(() => {
   return chartCount.value > 0
 })
 
-function submitAnswers() {
-  const result: Record<string, any> = {
-    chart_count: chartCount.value,
-    task_id: taskId.value,
-    chart_slots: chartSlots.value.map((s, i) => ({
+function formattedMsgFn() {
+  // 获取任务名称
+  const taskOpt = taskOptions.value?.find((o: any) => String(o.value) === String(taskId.value))
+  const taskLabel = taskOpt?.name
+  const dateLabel = dateRange.value?.join(' 到 ')
+
+  const lines: string[] = ['📊 看板需求确认']
+  lines.push(`图表数量：**${chartCount.value}**`)
+
+  const slots: any[] = []
+  // 每个图表的配置
+  for (let i = 0; i < chartSlots.value.length; i ++) {
+    const slot = chartSlots.value[i]
+    const desc = slot.dimension ? `${slot.dimension}，关联任务：${taskLabel}，数据筛选时间从${dateLabel}` : ''
+    lines.push(`-图表${i + 1}：（${desc}）`)
+    slots.push({
       index: i + 1,
-      dimension: s.dimension,
-    })),
-    rule_ids: selectedRuleIds.value.map(value => Number(value)).filter(Number.isFinite),
-    signal_names: selectedSignalNames.value,
+      description: desc
+    })
   }
-  emit('submit', result)
+
+  const formattedMsg = '[问卷提交]\n' + lines.join('\n')
+  
+  return { result: formattedMsg, slots }
+}
+
+function submitAnswers() {
+  const { result, slots } = formattedMsgFn()
+  emit('submit', {
+    result: result,
+    taskId: taskId.value,
+    chartCount: chartCount.value,
+    slots: slots
+  })
 }
 </script>
 

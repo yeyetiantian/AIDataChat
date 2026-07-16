@@ -150,6 +150,13 @@ export interface ChatMessage {
   ask_questions?: any[]
   pending_step?: string | null
   dashboard_draft_id?: string
+  query_result?: {
+    sql: string
+    explanation?: string
+    columns: string[]
+    rows: Record<string, any>[]
+    total: number
+  } | null
 }
 
 /** 四象限拖拽区域类型 */

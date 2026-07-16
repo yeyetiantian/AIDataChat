@@ -114,6 +114,12 @@
                   <VegaLiteRenderer v-else :ref="el=>setRR(`c_${i}_${ci}`,el)" :data="ch.data" :config="ch.pivot_config" :chart-type="ch.chart_type" :hide-toolbar="true" :hide-title="true" />
                 </div>
               </div>
+              <div class="msg-charts-footer" v-if="msg.charts.length > 1">
+                <button class="import-all-btn" @click="quickImportAllCharts(msg.charts)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-2 6h4l-2 6m0 0l-2-6h4l-2-6"/><path d="M5 21h14"/></svg>
+                  一键导入全部（{{ msg.charts.length }} 个图表）
+                </button>
+              </div>
             </div>
             <div v-if="msg.rules?.length" class="msg-rules">
               <article v-for="(rule, ri) in msg.rules" :key="ri" class="rule-card">
@@ -131,6 +137,12 @@
                 </div>
               </article>
             </div>
+            <!-- DTC 查询结果 -->
+            <DtcQueryResult
+              v-if="msg.query_result"
+              :query-result="msg.query_result"
+              @view-sql="openQuerySql"
+            />
             <div v-if="msg.suggestions?.length" class="msg-sugs">
               <button v-for="sg in msg.suggestions" :key="sg" class="sug-chip" @click="sendText(sg)">{{ sg }}</button>
             </div>
@@ -172,8 +184,11 @@ import AskQuestionsPanel from './AskQuestionsPanel.vue'
 import ChartDataDialog from './ChartDataDialog.vue'
 import ChartSqlDialog from './ChartSqlDialog.vue'
 import SaveToBoardDialog from './SaveToBoardDialog.vue'
+import DtcQueryResult from './DtcQueryResult.vue'
 
 const chatStore = useChatStore()
+const chartStore = useChartStore()
+const boardStore = useBoardStore()
 
 const sidebarOpen = ref(false)
 const historyOpen = ref(false)
@@ -186,6 +201,53 @@ const sqlDialogRef = ref<any>(null)
 const saveDialogRef = ref<any>(null)
 
 const rendererRefs = ref<Record<string,any>>({})
+
+function openQuerySql(sql: string) {
+  sqlDialogRef.value?.open(sql, 'sql')
+}
+
+async function quickImportAllCharts(charts: any[]) {
+  const title = `AI 导入 ${new Date().toLocaleDateString('zh-CN')} ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+  const newBoard = await boardStore.createBoard(title)
+  if (!newBoard) {
+    ElMessage.warning(boardStore.error || '创建看板失败')
+    return
+  }
+  const bid = newBoard.id
+  try {
+    await chartStore.fetchCharts(bid)
+    const available = MAX_BOARD_CHARTS - chartStore.charts.length
+    if (available <= 0) {
+      ElMessage.warning(`看板已满（最多 ${MAX_BOARD_CHARTS} 个图表）`)
+      return
+    }
+    const toImport = charts.slice(0, available)
+    let successCount = 0
+    for (const ch of toImport) {
+      const chartTitle = ch.title || `图表 ${successCount + 1}`
+      const ok = await chartStore.saveChart(
+        chartTitle,
+        ch.pivot_config || { filters: [], axes: [], legend: [], values: [] },
+        ch.content || '',
+        ch.chart_type || 'bar',
+        null,
+        ch.data || null,
+        bid,
+      )
+      if (ok) successCount++
+    }
+    if (successCount > 0) {
+      ElMessage.success(`已创建看板「${title}」，成功导入 ${successCount} 个图表`)
+    } else {
+      ElMessage.warning(chartStore.error || '导入失败')
+    }
+    if (toImport.length < charts.length) {
+      ElMessage.warning(`看板容量不足，仅导入 ${toImport.length} 个`)
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '导入失败')
+  }
+}
 
 function setRR(k:string, inst:any) {
   if (inst && typeof inst.exportPng==='function') rendererRefs.value[k]=inst
@@ -220,36 +282,14 @@ function toggleFullscreen() {
  * 提交后隐藏问卷面板不可再次发送
  */
 async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
-  const chartCount = answers.chart_count || 3
-  const taskId = answers.task_id || ''
-  const slots = answers.chart_slots || []
-
-  // 获取任务名称
-  const taskQ = (msg.ask_questions || []).find((x: any) => x.id === 'task_id')
-  const taskOpt = taskQ?.options?.find((o: any) => String(o.value) === String(taskId))
-  const taskLabel = taskOpt?.label?.replace(/\([A-Z_]+=\d+\)\s*/g, '') || taskId || '未选择'
-
-  const lines: string[] = ['📊 看板需求确认']
-  lines.push(`图表数量：${chartCount}个`)
-  lines.push(`关联任务：${taskLabel}`)
-
-  // 每个图表的配置
-  for (const slot of slots) {
-    const desc = slot.dimension ? `（${slot.dimension}）` : ''
-    lines.push(`图表${slot.index}${desc}`)
-  }
-
-  const formattedMsg = '[看板草案]\n' + lines.join('\n')
   msg.ask_questions = []
   msg.pending_step = null
-  chatStore.sendMessage(formattedMsg, {
+  chatStore.sendMessage(answers.result, {
     dashboardDraft: {
       goal: '报警分析总览',
-      task_id: Number(taskId),
-      chart_count: Number(chartCount),
-      rule_ids: (answers.rule_ids || []).map(Number).filter(Number.isFinite),
-      signal_names: answers.signal_names || [],
-      chart_slots: slots.map((slot: any) => ({ index: slot.index, description: slot.dimension || '' })),
+      task_id: Number(answers.taskId),
+      chart_count: Number(answers.chartCount),
+      chart_slots: answers.slots
     },
   })
   scrollToBottom()
@@ -600,6 +640,33 @@ watch(()=>chatStore.messages.length,()=>scrollToBottom())
   gap: 10px;
 }
 
+.msg-charts-footer {
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.import-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: 1px dashed #3b82f6;
+  border-radius: 8px;
+  background: #f0f7ff;
+  color: #3b82f6;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.import-all-btn:hover {
+  background: #3b82f6;
+  color: #fff;
+  border-color: #3b82f6;
+}
+
 .chart-card {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
@@ -688,7 +755,7 @@ watch(()=>chatStore.messages.length,()=>scrollToBottom())
   max-width: 760px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid #d1d5db;

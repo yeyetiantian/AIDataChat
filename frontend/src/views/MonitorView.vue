@@ -142,7 +142,12 @@
 
               <!-- Trace 展开内容：递归 Span 树 -->
               <div v-if="trace._expanded" class="trace-body">
+                <div v-if="!trace.rootSpan" class="trace-body-loading">
+                  <el-icon class="is-loading" :size="16"><Loading /></el-icon>
+                  <span>加载详情中...</span>
+                </div>
                 <TraceSpanNode
+                  v-else
                   :span="trace.rootSpan"
                   :depth="0"
                   @toggle="onToggleSpan"
@@ -260,9 +265,10 @@ interface TraceSummary {
   status: string
   created_at: string
   time: string
-  rootSpan: TraceSpan
+  rootSpan: TraceSpan | null
   root_span?: TraceSpan
   _expanded?: boolean
+  _detailLoaded?: boolean
 }
 
 interface MonitorStats {
@@ -414,7 +420,7 @@ const filteredTraces = computed(() => {
   return traces.value.filter(t => t.session_id === filterSessionId.value)
 })
 
-/** 从后端加载真实 trace 记录 */
+/** 从后端加载 trace 摘要列表（不加载详情，点击展开时按需加载） */
 async function fetchRealTraces() {
   loadingTraces.value = true
   try {
@@ -423,28 +429,18 @@ async function fetchRealTraces() {
     const data = await resp.json()
     const summaries = data.traces || []
 
-    // 并发获取每个 trace 的详细 root_span
-    const fullTraces: TraceSummary[] = []
-    for (const s of summaries) {
-      try {
-        const detailResp = await fetch(`/api/monitor/traces/${s.id}`)
-        if (!detailResp.ok) continue
-        const detail = await detailResp.json()
-        const rootSpan: TraceSpan = detail.root_span || detail.rootSpan
-        fullTraces.push({
-          ...s,
-          requestMessage: s.request_message || s.id,
-          time: s.created_at || '',
-          rootSpan: rootSpan || { id: 'empty', name: 'No Data', type: 'chain', status: 'success', startTime: '', duration: '', input: null, output: null, children: [] } as TraceSpan,
-          _expanded: false,
-        })
-      } catch { /* skip */ }
-    }
-    traces.value = fullTraces
+    traces.value = summaries.map((s: any) => ({
+      ...s,
+      requestMessage: s.request_message || s.id,
+      time: s.created_at || '',
+      rootSpan: null as TraceSpan | null,
+      _expanded: false,
+      _detailLoaded: false,
+    }))
 
     // Update session filter options
     const seen = new Map<string, string>()
-    for (const t of fullTraces) {
+    for (const t of traces.value) {
       if (t.session_id && !seen.has(t.session_id)) {
         seen.set(t.session_id, t.requestMessage.slice(0, 40))
       }
@@ -458,7 +454,19 @@ async function fetchRealTraces() {
   }
 }
 
-function toggleTrace(trace: TraceSummary) {
+async function toggleTrace(trace: TraceSummary) {
+  if (!trace._expanded && !trace._detailLoaded) {
+    // 点击展开，按需加载详情
+    try {
+      const detailResp = await fetch(`/api/monitor/traces/${trace.id}`)
+      if (detailResp.ok) {
+        const detail = await detailResp.json()
+        const rootSpan: TraceSpan = detail.root_span || detail.rootSpan
+        trace.rootSpan = rootSpan || { id: 'empty', name: 'No Data', type: 'chain', status: 'success', startTime: '', duration: '', input: null, output: null, children: [] } as TraceSpan
+      }
+    } catch { /* ignore */ }
+    trace._detailLoaded = true
+  }
   trace._expanded = !trace._expanded
 }
 
@@ -896,6 +904,16 @@ function handleOpenDetailEvent(e: Event) {
 
 .trace-body {
   padding: 0;
+}
+
+.trace-body-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #909399;
+  font-size: 13px;
 }
 
 .log-empty {
