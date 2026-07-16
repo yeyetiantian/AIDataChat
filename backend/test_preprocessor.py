@@ -15,6 +15,8 @@ from services.query_preprocessor import preprocess_chart_query
 # ============================================================
 
 TEST_CASES = [
+    "统计在任务[ND EREV 工程车基本工作信息_5377_1]中规则在从2025-08-29~09-04内产生报警的数量占比",
+    "统计在任务[ND EREV 工程车基本工作信息_5377_1]中，从2025-08-29~09-11每天的报警数量，用规则做图例, 生成柱状图",
     "生成雷达图，对比维度包括[平均值，最大值，最小值]，统计信号[VehSpdAvgDrvn_1,LIB1StatOfChrg,LIB1CellMinVltg,EngActStdyStTorq,VehOdo]的报警值，不要指定图例，关联任务：ND EREV 工程车基本工作信息_5377_1，数据筛选时间从2025-08-29 00:00:00 到 2025-09-04 23:59:59",
     "生成散点图，统计横轴信号[VehSpdAvgDrvn_1]与纵轴信号[HVBSOC_BatSOC]的报警值做对比，关联任务：ND EREV 工程车基本工作信息_5377_1，数据筛选时间从2025-08-29 00:00:00 到 2025-09-04 23:59:59",
     "生成区域图，统计横轴信号[HVBSOC_BatSOC、VehSpdAvgDrvn_1、VehOdo、HiVltgBatMinCellVltg、MtrBCntrlModeAchvd]的报警值，关联任务：ND EREV 工程车基本工作信息_5377_1，数据筛选时间从2025-08-29 00:00:00 到 2025-09-04 23:59:59",
