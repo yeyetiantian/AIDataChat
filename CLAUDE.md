@@ -8,11 +8,11 @@
 
 - **核心交互**：看板式图表管理 + AI 对话式（自然语言生成图表配置）+ 配置面板拖拽
 - **数据源**：外部 Pivot API（`http://127.0.0.1:8080/api2/pivot/query`）执行实际查询
-- **元数据存储**：SQLite `backend/ai_data.db`（用户、会话、消息、图表、看板、字段注册表、Agent Trace）
-- **外部维表**：SQLite 从 DuckDB 同步的维表（任务、规则、车辆、车型），供 Agent 上下文注入
-- **AI 引擎**：LangGraph Agent（意图识别 → 子 Agent 分发：chart/dashboard → chart_agent, rule → rule_agent, chat → chat_agent）
-- **Agent 链路监控**：TraceCollector 全链路 Span 树 → 存储到 SQLite `trace_spans` 表 + JSON 文件落盘
-- **LLM 支持**：OpenAI（默认）/ 私有 LLM（OAuth2 client_credentials，含 apiTag/clientRequestId 供应商定制头）
+- **元数据存储**：SQLite `backend/ai_data.db`（用户、会话、消息、图表、看板、字段注册表、Agent Trace、外部维表）
+- **外部维表**：SQLite 从 DuckDB 同步的维表（任务、规则、车辆、车型、规则-信号关系、信号统计），供 Agent 上下文注入
+- **AI 引擎**：LangGraph Agent（意图识别 → 5 个子 Agent 分发：chart/dashboard/rule/dtc/chat）
+- **Agent 链路监控**：TraceCollector 全链路 Span 树 → 存储到 SQLite `trace_spans` 表 + JSON 文件落盘，从接口层到各节点完整 I/O
+- **LLM 支持**：OpenAI（默认）/ DeepSeek / 私有 LLM（OAuth2 client_credentials，含 apiTag/clientRequestId 供应商定制头）
 - **后端**：FastAPI + LangGraph + Pydantic v2 + SQLite + 线程本地连接
 - **前端**：Vue 3 (Composition API) + Pinia + Element Plus + vega-embed
 - **打包**：PyInstaller（`build_package.py` → Onedir 分发）
@@ -31,13 +31,16 @@
 | `boards` | 看板，与 users 关联 |
 | `charts` | 图表配置，与 boards 关联（含 board_id 外键） |
 | `chat_sessions` | AI 对话会话（含 mode: chart/rule） |
-| `chat_messages` | 消息记录（含 charts_json / suggestions_json） |
+| `chat_messages` | 消息记录（含 charts_json / suggestions_json / ask_questions_json） |
 | `fields` | 字段注册表（从 hardcoded seed 导入，含固定字段 + 动态信号列，category 分类） |
 | `trace_spans` | Agent 链路追踪（Span 树 JSON，用于监控 API） |
+| `agent_drafts` | Agent 交互式问卷草案（dashboard 订单暂存） |
+| `freeze_functions` | 数据冻结函数库（供 rule_agent 推荐） |
 | `ext_tasks` | 外部任务维表（从 DuckDB 同步，用于 Agent 上下文注入） |
 | `ext_rules` | 外部规则维表（同上） |
 | `ext_vehicles` | 外部车辆维表（含 VIN） |
 | `ext_vehicle_types` | 外部车型维表 |
+| `rule_signals` | 规则与信号的确定性关系表（从 ext_rules 解析回填） |
 | `signal_stats` | 信号统计表（从 DuckDB 提取：信号名/类型/归属规则/报警次数），27K 行 |
 
 > 数据库使用 `threading.local()` 实现线程本地连接，PRAGMA journal_mode=DELETE。
@@ -63,20 +66,28 @@
     field_registry.py             # 字段注册表（从 SQLite 读取，供 API 和 Agent 使用）
   /agents
     __init__.py                   # 空包文件
-    pivot_agent.py                # 主入口 Agent：意图识别（chat/chart/rule/dashboard）→ 分发给子 Agent
-    chart_agent.py                # 图表分析子 Agent（analyze → validate → execute → format_reply），含交互式问卷
-    rule_agent.py                 # 规则推荐子 Agent（analyze_rule → format_reply）
+    pivot_agent.py                # 主入口 Agent：意图识别（chat/chart/rule/dashboard/dtc）→ 分发给子 Agent
+    chart_agent.py                # 单图表生成子 Agent（analyze → validate → execute → format_reply），无重试
+    dashboard_agent.py            # 看板多图表生成子 Agent（check_completeness → generate_charts → execute → format_reply），含交互式问卷
+    rule_agent.py                 # 规则函数推荐子 Agent（analyze_rule → format_reply）
     chat_agent.py                 # 闲聊子 Agent（chat_reply → format_reply）
+    dtc_agent.py                  # DTC 故障码查询子 Agent
     llm_utils.py                  # LLM 工具模块：全局 LLM 缓存、StructuredOutput、JSON 解析、TraceCollector/SpanNode
+  /services
+    query_preprocessor.py         # 用户查询预处理器：规则代码从自然语言提取结构化中间语言注入 LLM prompt
+    chart_type_specs.py           # 图表类型字段规格注册表（各图表类型的 axes/values/legend 约束定义）
+    rule_knowledge.py             # 规则知识库：规则分类/说明/示例
+    rule_validator.py             # 规则表达式校验器
   /routers
-    api_chat.py                  # POST /api/chat — AI 对话（含会话历史管理，支持 DB 模式/内存模式）
+    api_chat.py                  # POST /api/chat — AI 对话（含会话历史管理，支持 DB 模式/内存模式，历史 20 条截断）
     api_charts.py                # GET/POST/PUT/DELETE /api/charts — 图表 CRUD
     api_boards.py                # GET/POST/PUT/DELETE /api/boards — 看板 CRUD
-    api_sessions.py              # GET/POST/PUT/DELETE /api/chat/sessions — 会话管理
-    api_admin.py                 # GET /api/fields — 字段列表；POST /api/admin/refresh_wide_detail；POST /api/admin/reset-fields
-    api_recommend.py             # POST /api/recommend-chart — 图表类型推荐（规则引擎）
+    api_sessions.py              # GET/POST/PUT/DELETE /api/chat/sessions — 会话管理（含 mode 更新、消息查询）
+    api_admin.py                 # GET /api/fields — 字段列表；POST /api/admin/refresh_wide_detail；POST /api/admin/reset-fields；GET /api/admin/health
+    api_recommend.py             # POST /api/recommend-chart — 图表类型推荐（基于 chart_type_specs 规则引擎）
+    api_functions.py             # GET /api/functions/tasks — 任务列表；GET /api/functions/rules — 规则列表；GET /api/functions/signals — 信号列表
     api_auth.py                  # GET /api/auth/users — 用户列表（无登录认证）
-    api_monitor.py               # GET /api/monitor/traces — Agent Trace 监控查询
+    api_monitor.py               # GET /api/monitor/traces — Agent Trace 监控查询（摘要/详情/统计）
   /llm
     __init__.py                  # 私有 LLM OAuth2 认证（client_credentials 模式，含 apiTag 等供应商定制头）
   /models
@@ -84,6 +95,9 @@
     pivot_config.py              # Pydantic 模型：FilterItem, AxisItem, LegendItem, ShowAs,
                                  # ValueItem, FilterOnAgg, OrderBy, PivotConfig, PivotResponse,
                                  # RuleRecommendation, ChatRequest, ChatResponse
+    dashboard_draft.py           # 结构化看板草案：DashboardRequestDraft, DashboardChartSlot
+    dashboard_recommendation.py  # 看板推荐模型
+    rule_recommendation.py       # 规则推荐模型
   /data
     wide_fields.json             # 字段注册表源文件（首次启动导入到 SQLite，后续用 hardcoded seed 替代）
   main.py                        # FastAPI 入口 + lifespan 事件（包含 CORS、路由注册、前端静态文件挂载）
@@ -108,6 +122,8 @@
       ChartDataDialog.vue         # 图表数据查看弹窗
       ChartSqlDialog.vue          # SQL 查看弹窗
       SaveToBoardDialog.vue       # 保存到看板弹窗
+      AskQuestionsPanel.vue       # 看板需求问卷面板（图表数量/任务选择/规则信号拖拽/时间范围/图表槽位）
+      TraceSpanNode.vue           # Agent Trace Span 树可视化组件
     /views
       BoardView.vue              # 主视图（看板侧栏 200px + 图表网格 + 配置侧栏 368px + AI 按钮）
     /types
@@ -130,39 +146,89 @@
 
 ## 关键实现约定
 
-### 数据流向
+### AI Agent 数据流向
 
 ```
-用户操作 → PivotConfig JSON → 外部 Pivot API (/api2/pivot/query) → 
-  → data + columns + vega_spec + config + sql + execution_time_ms → Vega-Lite 渲染
-          
-用户输入 → POST /api/chat → pivot_agent.process_chat() → 意图识别 → 
-  → chart → chart_agent (analyze → validate→ execute → format_reply)
-  → rule  → rule_agent (analyze_rule → format_reply)
-  → chat  → chat_agent (chat_reply → format_reply)
-  → dashboard → chart_agent（同 chart，特殊检测关键词触发交互式问卷 ask_questions）
+用户输入 → POST /api/chat → pivot_agent.process_chat() → 意图识别（5 分类）→
 
-Agent 链路监控：
-  TraceCollector (SpanNode 树) → SQLite trace_spans 表 + agent_logs/{agent}_{session_id}.json
+  chart     → chart_agent      (analyze → validate → execute → format_reply)
+             单图表，无重试，调用 Pivot API 失败直接返回
+
+  dashboard → dashboard_agent  (check_completeness → generate_charts → execute → format_reply)
+             多图表，LLM 完善度检查 → 问卷交互或自动提取 chart_infos → 批量生成配置 → 批量执行
+
+  rule      → rule_agent       (analyze_rule → format_reply)
+             从 freeze_functions 表读取函数库推荐
+
+  dtc       → dtc_agent        (analyze_dtc → format_reply)
+             查询 dtc_info / dtc_trigger 表数据
+
+  chat      → chat_agent       (chat_reply → format_reply)
+             友好闲聊回复
+
+Trace 全链路监控：
+  pivot_agent 创建 TraceCollector → 意图识别 span → 子 Agent span → 各节点 span
+  → 完整 Span 树保存至 SQLite trace_spans 表 + agent_logs/{agent}_{session_id}.json
+  每个 span 记录原始完整 I/O（输入消息、输出响应），无截断
 ```
 
 ### 后端
 
-- `pivot_agent.py` 核心数据流：`intent_recognition（IntentOutput: chat/chart/rule/dashboard）→ 路由分发（三个子 Agent）`
-- `chart_agent.py`：`analyze→validate→execute→format_reply`，重试最多 1 次，支持交互式问卷（`ask_questions`）
-- `rule_agent.py`：`analyze_rule→format_reply`，硬编码规则分类（速度/驾驶行为/时间/地理围栏）
+- `pivot_agent.py` 核心数据流：`intent_recognition（IntentOutput: chat/chart/rule/dashboard/dtc 五分类）→ 路由分发（5个子Agent）`
+- `pivot_agent.py` 创建全链路 TraceCollector，覆盖 API 请求到子 Agent 执行完成
+- `chart_agent.py`：单图表生成，`analyze→validate→execute→format_reply`，**调用 Pivot API 失败不重试**
+- `dashboard_agent.py`：多图表看板生成，`check_completeness→generate_charts→execute→format_reply`
+  - `check_completeness`：LLM 分析信息完善度 + 提取 chart_infos（图表描述列表）；有 draft 时直接提取
+  - `generate_charts`：根据 chart_infos 调用 LLM 批量生成 PivotConfig
+  - 调用 Pivot API 失败不重试
+- `rule_agent.py`：`analyze_rule→format_reply`，从 `freeze_functions` 表读取函数库
 - `chat_agent.py`：`chat_reply→format_reply`，简洁回答
-- Agent 使用 Structured Output（`AgentOutput` 模型），私有 LLM 兜底 `PydanticOutputParser` + `try_parse_json` 手动解析
-- 配置校验：validate 节点检查 values 和 axes 非空，失败回流 analyze 重试（最多 1 次）
+- `dtc_agent.py`：`analyze_dtc→format_reply`，查询 DTC 故障码/触发记录
+
+### 查询预处理层（query_preprocessor.py）
+
+在 LLM 调用之前，通过规则代码从自然语言中提取结构化图表需求（ParsedChartRequest），
+注入到 LLM prompt 中作为约束，让 LLM 只需做"结构化描述→PivotConfig"的映射：
+
+- 图表类型（柱状/折线/饼图等 6 种）
+- 时间范围（绝对日期 / 相对时间：最近N天/周/月）
+- 行维度（横轴/X轴、信号名称）
+- 图例（用X做图例、按X分组）
+- 指标（报警次数、时长、占比等）
+- 任务引用（[名称_ID]、TASK_ID=xxx）
+- 信号括号格式支持：`[]`、`【】`、`""`、`（）`
+
+测试脚本：`backend/test_preprocessor.py`（30 个测试用例覆盖）
+
+### Agent 通用机制
+
+- 所有 Agent 使用 Structured Output（`AgentOutput` / 各自专用模型），私有 LLM 兜底 `PydanticOutputParser` + `try_parse_json` 手动解析
 - 配置 normalize：`_deep_normalize_chart` 处理 filters（只保留固定字段，value 转数组，op 合法性校验）、legend（字段来源校验）、order_by（只保留 value_fields 中字段）
-- 执行节点：通过 HTTP POST 同步调用外部 `/api2/pivot/query` 查询数据（`requests.post`，60s 超时）
-- 意图识别：独立轻量调用 `IntentOutput`（chat/chart/rule/dashboard 四分类）
-- Chat 模式不生成 charts 和 suggestions；Chart 模式默认单图表，用户明确要求才多图表
-- dashboard 在意图识别中单独分类，但实际与 chart 走同一路径，`analyze_node` 中靠中文关键词匹配触发交互式问卷
-- 交互式问卷：当用户需求模糊（如"帮我创建一个看板"）时，LLM 输出 `ask_questions` 收集信息，前端展示问卷，用户提交后继续
+- 执行节点：通过 HTTP POST 同步调用外部 `POST /api2/pivot/query` 查询数据（`requests.post`，60s 超时）
 - Agent 链路日志：完整 Span 树保存至 `SQLite trace_spans` 表 + JSON 文件落盘 `agent_logs/{agent}_{session_id}.json`
 - 全局缓存：LLM 实例、StructuredOutput（按模块限定名缓存）、Schema 文本、System Prompt（减少重复构造）
 - 数据库线程安全：使用 `threading.local()` 实现线程本地数据库连接
+
+### Trace 全链路追踪
+
+TraceCollector 从 `pivot_agent.process_chat()` 创建根 Span，覆盖完整请求：
+
+```
+pivot_agent (根 Span) ← 包含完整请求上下文 + 返回结果
+├── intent_recognition  ← LLM 意图分类（输入：用户消息 → 输出：intent+reason）
+└── chart_agent / dashboard_agent / rule_agent / chat_agent / dtc_agent
+    ├── analyze / generate_charts / ...  ← LLM 调用（完整 Prompt + 原始输出）
+    ├── validate (如有)                   ← 配置校验（完整配置输入）
+    ├── execute Pivot API                 ← HTTP 调用（完整请求体 + 响应体）
+    └── format_reply                      ← 结果格式化（完整回复文本）
+```
+
+每个 Span 记录：
+- `input`：原始输入（消息全文、配置列表等）
+- `output`：原始输出（LLM 响应、API 返回体等）
+- `messages`：LLM 调用时记录完整 Prompt（system+history+user）
+- `duration_ms`：执行耗时
+- 所有数据无截断
 
 ### 数据模型
 
@@ -188,6 +254,7 @@ Agent 链路监控：
 - 配置面板 `ConfigPanel.vue`：字段列表（固定字段 + 信号列表并排）、四象限拖拽（filters/axes/legend/values）、筛选器（时间/数值/字符串/API 下拉分类）、排序、总计/小计、分页、图表类型选择
 - AI 对话 `AIDialog.vue`：全屏弹窗，左侧历史会话侧栏，右侧消息列表 + 图表渲染 + 建议问题 + 交互式问卷（ask_questions）
 - 图表渲染 `VegaLiteRenderer.vue`：vega-embed 渲染，支持全屏、数据查看、SQL 查看、导出 PNG/SVG；通过 ref handle 暴露 `openDataDialog`/`toggleFullscreen`/`exportPng`/`exportSvg` 方法
+- 看板问卷 `AskQuestionsPanel.vue`：图表数量选择、任务搜索、规则/信号标签（可拖拽到图表槽）、时间范围选择、多 Tab 图表配置
 - `vite.config.ts` 代理：`/api → localhost:8000`（后端），`/api2 → 127.0.0.1:8080`（Pivot API）
 - **不锁图表库**：配置项传给 `v-chart` 组件内部使用 vega-embed 渲染，仅输出 Vega-Lite 规范
 - `element-plus` 作为辅助 UI 组件
@@ -241,6 +308,10 @@ source .venv/bin/activate
 python main.py                  # 开发模式（reload 自动）
 python run.py                   # 生产模式（自动打开浏览器）
 
+# 前处理器测试
+cd backend && source .venv/bin/activate
+python test_preprocessor.py              # 全部 30 条测试用例
+
 # 前端
 cd frontend
 npm run dev                     # 开发服务器（代理 /api → 8000, /api2 → 8080）
@@ -258,7 +329,7 @@ python build_package.py         # PyInstaller → package_output/AIDataChat/
 
 | 方法 | 路由 | 模块 | 说明 |
 |------|------|------|------|
-| POST | `/api/chat` | `api_chat.py` | AI 对话（含 DB/内存双模式、history 截断 20 条） |
+| POST | `/api/chat` | `api_chat.py` | AI 对话（含 DB/内存双模式、history 截断 20 条、看板问卷草稿） |
 | GET | `/api/fields` | `api_admin.py` | 字段列表（固定字段 + 信号列表分组） |
 | POST | `/api/admin/refresh_wide_detail` | `api_admin.py` | 手动触发宽表重建（遗留） |
 | POST | `/api/admin/reset-fields` | `api_admin.py` | 重置字段为 hardcoded 数据 |
@@ -267,21 +338,28 @@ python build_package.py         # PyInstaller → package_output/AIDataChat/
 | PUT/DELETE | `/api/charts/{chart_id}` | `api_charts.py` | 单图表更新/删除 |
 | GET/POST | `/api/boards` | `api_boards.py` | 看板 CRUD（?user_id= 筛选） |
 | PUT/DELETE | `/api/boards/{board_id}` | `api_boards.py` | 单看板更新/删除 |
-| GET/POST/PUT/DELETE | `/api/chat/sessions` | `api_sessions.py` | 会话管理（含 mode 更新） |
-| POST | `/api/recommend-chart` | `api_recommend.py` | 图表类型推荐（规则引擎） |
+| GET/POST/PUT/DELETE | `/api/chat/sessions` | `api_sessions.py` | 会话管理（含 mode 更新、消息查询） |
+| POST | `/api/recommend-chart` | `api_recommend.py` | 图表类型推荐（基于 chart_type_specs 规则引擎） |
 | GET | `/api/auth/users` | `api_auth.py` | 用户列表（无密码/无登录认证） |
 | GET | `/api/monitor/traces` | `api_monitor.py` | Agent Trace 摘要列表 |
 | GET | `/api/monitor/traces/{trace_id}` | `api_monitor.py` | 完整 Trace 详情（含 Span 树） |
 | GET | `/api/monitor/traces/sessions/list` | `api_monitor.py` | 有 Trace 的会话列表 |
 | GET | `/api/monitor/stats` | `api_monitor.py` | Trace 统计（total/success/error） |
+| GET | `/api/functions/tasks` | `api_functions.py` | 任务列表（支持 keyword 搜索） |
+| GET | `/api/functions/rules` | `api_functions.py` | 规则列表（支持 task_id 筛选） |
+| GET | `/api/functions/signals` | `api_functions.py` | 信号列表（支持 task_id 筛选） |
 | GET | `/` | `main.py` | 服务信息 / Python 环境：挂载前端静态文件 |
 
 ## 关键演进记录
 
 - **原方案**：DuckDB 宽表 WIDE_DETAIL + 自建 SQL Builder → 被当前外部 Pivot API 方案替代
-- **已删除的文件**：`db_connector.py`, `db_initializer.py`, `pivot_sql_builder.py`, `api_pivot.py`
+- **已删除的文件**：`db_connector.py`, `db_initializer.py`, `pivot_sql_builder.py`, `api_pivot.py`, `chart_data_quality.py`
 - **元数据迁移**：charts.json → SQLite（`chat_db.py` 统一管理）
 - **Agent 演进**：NL2SQL → 结构化输出 PivotConfig + HTTP 调用外部 API 执行
+- **Agent 拆分**：原 chart_agent 单 Agent 兼顾单图表+看板 → 拆分为 chart_agent（单图表）+ dashboard_agent（多图表看板）
+- **添加 DTC Agent**：新增 dtc_agent 处理 DTC 故障码查询
+- **查询预处理器**：新增 query_preprocessor 规则引擎，从自然语言提取结构化中间语言注入 LLM prompt
+- **Trace 全链路追踪**：TraceCollector 从 pivot_agent 开始，覆盖意图识别→子 Agent→各节点，记录完整 I/O 无截断
 - **前端演进**：Dashboard + DragDropZone → BoardView + ChartBoard + ConfigPanel + AIDialog
 - **详细数据库文档**：[vcloud_duck_数据库文档.md](vcloud_duck_数据库文档.md)
 - **完整需求**：[需求说明.md](需求说明.md)

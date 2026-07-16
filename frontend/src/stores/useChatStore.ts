@@ -13,6 +13,13 @@ export interface ChatMessage {
   ask_questions?: any[]
   pending_step?: string | null
   dashboard_draft_id?: string
+  query_result?: {
+    sql: string
+    explanation?: string
+    columns: string[]
+    rows: Record<string, any>[]
+    total: number
+  } | null
 }
 
 export interface ChatSession {
@@ -105,15 +112,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function createSession(title = '新对话') {
-    // 当前已有空会话，直接复用不复用不创建
-    const newSession = sessions.value.find(s => s.messages.length === 0)
-    if (newSession) {
-      activeSessionId.value = newSession.id
-      return
-    }
-    if (activeSession.value && activeSession.value.messages.length === 0) {
-      return
-    }
+    // 始终创建新会话，不复用现有会话（避免复用有历史的会话导致消息串扰）
     try {
       const resp = await fetch('/api/chat/sessions', {
         method: 'POST',
@@ -152,6 +151,7 @@ export const useChatStore = defineStore('chat', () => {
             ask_questions: m.ask_questions || [],
             pending_step: m.pending_step || null,
             dashboard_draft_id: m.dashboard_draft_id || '',
+            query_result: m.query_result || null,
           }))
         }
       }
@@ -176,10 +176,8 @@ export const useChatStore = defineStore('chat', () => {
 
   async function switchSession(id: string) {
     activeSessionId.value = id
-    const session = sessions.value.find(s => s.id === id)
-    if (session && session.messages.length === 0) {
-      await fetchMessages(id)
-    }
+    // 始终从后端获取最新消息，不依赖前端缓存（避免历史串扰）
+    await fetchMessages(id)
   }
 
   async function deleteSession(id: string) {
@@ -234,6 +232,7 @@ export const useChatStore = defineStore('chat', () => {
         ask_questions: data.ask_questions || [],
         pending_step: data.pending_step || null,
         dashboard_draft_id: data.dashboard_draft_id || '',
+        query_result: data.query_result || null,
       })
     } catch (e: any) {
       session.messages.push({

@@ -168,9 +168,15 @@ async def process_chat(
     logger.info("意图识别: %s (%s)", intent, reason)
 
     # 2. 分发到子 Agent（传入 tc 实现全链路追踪）
-    if intent == "chart" or intent == "dashboard":
+    if intent == "chart":
         from agents.chart_agent import process_chart as chart_process
         result = await chart_process(
+            message, history, session_id=session_id,
+            trace_collector=tc, parent_span=tc.root,
+        )
+    elif intent == "dashboard":
+        from agents.dashboard_agent import process_dashboard
+        result = await process_dashboard(
             message, history, session_id=session_id, intent=intent, dashboard_draft=dashboard_draft,
             trace_collector=tc, parent_span=tc.root,
         )

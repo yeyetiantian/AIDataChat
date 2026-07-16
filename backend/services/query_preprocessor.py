@@ -10,8 +10,8 @@ BRACKET_CLOSE = r'[\]】)}]'
 BRACKET_PATTERN = re.compile(rf'({BRACKET_OPEN})(.*?)({BRACKET_CLOSE})')
 SPLIT_SEP_PAT = re.compile(r'[，,、]')
 
-AXIS_KEYWORDS = ("横轴", "x轴", "X轴", "横坐标")
-VALUE_KEYWORDS = ("纵轴", "y轴", "Y轴", "竖轴", "纵坐标")
+AXIS_KEYWORDS = ("横轴", "x轴", "X轴", "横坐标", "行维度")
+VALUE_KEYWORDS = ("纵轴", "y轴", "Y轴", "竖轴", "纵坐标", "列维度")
 LEGEND_KEYWORDS = ("图例", "分组", "区分")
 
 CHART_TYPE_MAP = {
