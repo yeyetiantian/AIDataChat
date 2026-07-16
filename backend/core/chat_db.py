@@ -166,13 +166,20 @@ def init_db():
         conn.execute("ALTER TABLE chat_messages ADD COLUMN query_result_json TEXT")
     except Exception:
         pass
-    # DTC 数据表（仅创建空表，有数据时由 import_xlsx.py 导入或外部同步回填）
+    # DTC 数据表（仅创建空表结构，有数据时由 import_xlsx.py 导入或外部同步回填）
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS dtc_info (
-            _rowid INTEGER PRIMARY KEY AUTOINCREMENT
+            "ID" TEXT, "VIN" TEXT, "COLLECTION_TIME" TEXT, "ECU_NAME" TEXT,
+            "ECU_NAME_2" TEXT, "DTC_CODE" TEXT, "ERROR_TYPE" TEXT, "DTC_STATUS" TEXT,
+            "DTC_DESCRIPTION" TEXT, "DTC_MESSAGE" TEXT, "RMU_CODE" TEXT, "SOURCE_ID" TEXT,
+            "RESPONSE_STR" TEXT, "DTC_STATUS_DES" TEXT, "DTC_CODE_FAIL_TYPE" TEXT,
+            "CHANNEL" TEXT, "DIAG_PROTOCOL_TYPE" TEXT, "PROTOCOL" TEXT
         );
         CREATE TABLE IF NOT EXISTS dtc_trigger (
-            _rowid INTEGER PRIMARY KEY AUTOINCREMENT
+            "DTC_TRIGGER_ID" TEXT, "VIN" TEXT, "RMU_CODE" TEXT, "DTC_CODE" TEXT,
+            "TRIGGER_TIME" TEXT, "DTC_SOURCE" TEXT, "CHANNEL" TEXT, "DTC_FAULT_TYPE" TEXT,
+            "DTC_TRIGGERED" TEXT, "GPS_LAT" TEXT, "GPS_LON" TEXT, "CHANNEL_DES" TEXT,
+            "EVENT_NAME" TEXT, "FUTURE_A" TEXT
         );
     """)
     seed_default_users()
@@ -205,6 +212,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_freeze_functions_name ON freeze_functions(name);
         CREATE INDEX IF NOT EXISTS idx_freeze_functions_type ON freeze_functions(func_type);
     """)
+    # DTC 表初始化验证
+    try:
+        for tbl in ("dtc_info", "dtc_trigger"):
+            cur = conn.execute(f"SELECT COUNT(*) FROM [{tbl}]")
+            cnt = cur.fetchone()[0]
+            logger.info("DTC 表 [%s] 数据行数: %s", tbl, cnt)
+    except Exception as e:
+        logger.warning("DTC 表验证失败: %s", e)
     logger.info("聊天历史数据库已初始化: %s", DB_PATH)
 
 

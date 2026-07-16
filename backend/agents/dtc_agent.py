@@ -285,7 +285,7 @@ def analyze_dtc_node(state: DtcState) -> DtcState:
 
 
 def execute_dtc_node(state: DtcState) -> DtcState:
-    """执行 SQL 查询 — 调用 /api/dtc/query 接口"""
+    """执行 SQL 查询 — 直连数据库执行，不通过 HTTP 自调用（避免死锁）"""
     tc: TraceCollector | None = state.get("trace_collector")
     parent_span: SpanNode | None = state.get("trace_span")
     sp: SpanNode | None = parent_span.add_child(
@@ -299,54 +299,57 @@ def execute_dtc_node(state: DtcState) -> DtcState:
             sp.finish(error=state["error"])
         return state
 
+    # SQL 安全校验（复用 api_dtc_query 的规则）
+    if not sql.upper().startswith("SELECT"):
+        state["error"] = "只允许 SELECT 查询"
+        if sp:
+            sp.finish(error=state["error"])
+        return state
+    dangerous = ["DELETE", "DROP", "INSERT", "UPDATE", "ALTER", "CREATE", "PRAGMA", "ATTACH"]
+    upper_sql = sql.upper()
+    for kw in dangerous:
+        import re
+        if re.search(rf"\b{re.escape(kw)}\b", upper_sql):
+            state["error"] = f"查询中包含不允许的关键字: {kw}"
+            if sp:
+                sp.finish(error=state["error"])
+            return state
+
     try:
-        import httpx
-        resp = httpx.post(
-            _DTC_API_URL,
-            json={"sql": sql},
-            timeout=30,
-        )
-
-        # 提取响应体中的错误详情（即使状态码非 200）
-        response_body = ""
-        try:
-            response_body = resp.json()
-        except Exception:
-            response_body = {"detail": resp.text[:500]}
-
-        resp.raise_for_status()
-        result = resp.json()
-
-        if not result.get("success"):
-            raise RuntimeError(f"API 返回错误: {result}")
-
-        state["query_result"] = result
-        if sp:
-            sp.finish(output={
-                "total": result.get("total", 0),
-                "columns": result.get("columns", []),
-            })
-
-    except httpx.HTTPStatusError as exc:
-        detail = ""
-        if isinstance(response_body, dict):
-            detail = response_body.get("detail") or response_body.get("message") or str(response_body)
+        import sqlite3
+        import sys
+        if getattr(sys, "frozen", False):
+            _backend_dir = os.path.dirname(os.path.abspath(sys.executable))
         else:
-            detail = str(response_body) if response_body else str(exc)
-        error_msg = f"查询参数有误，请调整后重试。{detail}"
-        logger.error("DTC 查询 HTTP 错误: %s", error_msg)
-        state["error"] = error_msg
-        state["query_result"] = None
-        if sp:
-            sp.finish(error=error_msg)
+            _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(_backend_dir, "ai_data.db")
 
-    except httpx.TimeoutException:
-        error_msg = "DTC 查询超时，请稍后重试或简化查询条件。"
-        logger.error("DTC 查询超时")
-        state["error"] = error_msg
-        state["query_result"] = None
-        if sp:
-            sp.finish(error=error_msg)
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(sql)
+            rows = [dict(row) for row in cursor.fetchall()]
+            columns = [desc[0] for desc in cursor.description]
+            state["query_result"] = {
+                "success": True,
+                "columns": columns,
+                "rows": rows,
+                "total": len(rows),
+            }
+            if sp:
+                sp.finish(output={
+                    "total": len(rows),
+                    "columns": columns,
+                })
+        except sqlite3.Error as e:
+            error_msg = f"查询参数有误，请调整后重试。{e}"
+            logger.error("DTC 查询执行失败: %s", error_msg)
+            state["error"] = error_msg
+            state["query_result"] = None
+            if sp:
+                sp.finish(error=error_msg)
+        finally:
+            conn.close()
 
     except Exception as exc:
         error_msg = f"DTC 查询异常，请稍后重试。{exc}"
