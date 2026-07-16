@@ -17,6 +17,7 @@ backend/build_temp/
 backend/package_output/
 backend/dist/
 backend/*.spec
+backend/*.db
 
 # ─── 环境变量 ───
 .env
