@@ -174,6 +174,15 @@ def init_db():
         conn.execute("ALTER TABLE chat_messages ADD COLUMN query_result_json TEXT")
     except Exception:
         pass
+    # DTC 数据表（仅创建空表，有数据时由 import_xlsx.py 导入或外部同步回填）
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS dtc_info (
+            _rowid INTEGER PRIMARY KEY AUTOINCREMENT
+        );
+        CREATE TABLE IF NOT EXISTS dtc_trigger (
+            _rowid INTEGER PRIMARY KEY AUTOINCREMENT
+        );
+    """)
     seed_default_users()
     # 迁移：给 charts 加 board_id 列（幂等）
     try:

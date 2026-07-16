@@ -301,12 +301,19 @@ def execute_dtc_node(state: DtcState) -> DtcState:
 
     try:
         import httpx
-        # 同步调用（Agent 在异步上下文中，但 httpx 支持 sync）
         resp = httpx.post(
             _DTC_API_URL,
             json={"sql": sql},
             timeout=30,
         )
+
+        # 提取响应体中的错误详情（即使状态码非 200）
+        response_body = ""
+        try:
+            response_body = resp.json()
+        except Exception:
+            response_body = {"detail": resp.text[:500]}
+
         resp.raise_for_status()
         result = resp.json()
 
@@ -320,12 +327,34 @@ def execute_dtc_node(state: DtcState) -> DtcState:
                 "columns": result.get("columns", []),
             })
 
-    except Exception as exc:
-        logger.error("DTC 查询执行失败: %s", exc)
-        state["error"] = str(exc)
+    except httpx.HTTPStatusError as exc:
+        detail = ""
+        if isinstance(response_body, dict):
+            detail = response_body.get("detail") or response_body.get("message") or str(response_body)
+        else:
+            detail = str(response_body) if response_body else str(exc)
+        error_msg = f"查询参数有误，请调整后重试。{detail}"
+        logger.error("DTC 查询 HTTP 错误: %s", error_msg)
+        state["error"] = error_msg
         state["query_result"] = None
         if sp:
-            sp.finish(error=str(exc))
+            sp.finish(error=error_msg)
+
+    except httpx.TimeoutException:
+        error_msg = "DTC 查询超时，请稍后重试或简化查询条件。"
+        logger.error("DTC 查询超时")
+        state["error"] = error_msg
+        state["query_result"] = None
+        if sp:
+            sp.finish(error=error_msg)
+
+    except Exception as exc:
+        error_msg = f"DTC 查询异常，请稍后重试。{exc}"
+        logger.error("DTC 查询执行失败: %s", exc)
+        state["error"] = error_msg
+        state["query_result"] = None
+        if sp:
+            sp.finish(error=error_msg)
 
     return state
 
@@ -337,7 +366,7 @@ def format_reply_node(state: DtcState) -> DtcState:
 
     if state.get("error"):
         error_msg = state["error"]
-        state["reply"] = f"查询执行出错：{error_msg}"
+        state["reply"] = error_msg
         if tc:
             tc.root.finish(error=error_msg)
     elif result:
