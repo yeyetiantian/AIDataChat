@@ -147,7 +147,7 @@ def format_reply_node(state: RuleState) -> RuleState:
         if state.get("error"):
             tc.root.finish(error=state["error"])
         else:
-            tc.root.finish(output={"reply": state.get("reply", "")[:200], "recommendations": len(state.get("rule_recommendations", []))})
+            tc.root.finish(output={"reply": state.get("reply", ""), "recommendations": len(state.get("rule_recommendations", []))})
     _save_trace_log(state)
     return state
 
@@ -179,27 +179,52 @@ async def process_rule(
     history: list[dict[str, str]] | None = None,
     session_id: str | None = None,
     task_id: int | None = None,
+    trace_collector: TraceCollector | None = None,
+    parent_span: SpanNode | None = None,
 ) -> dict[str, Any]:
-    """处理规则推荐请求。"""
+    """处理规则推荐请求。
+
+    Args:
+        trace_collector: 来自 pivot_agent 的 TraceCollector
+        parent_span: 父级 Span
+    """
     import time
     import uuid
 
     started_at = time.time()
-    collector = TraceCollector(session_id=session_id or "", request_message=message, agent_name="rule_agent")
+
+    if trace_collector and parent_span:
+        tc = trace_collector
+        agent_span = parent_span.add_child(
+            "rule_agent", "agent",
+            input={"message": message, "task_id": task_id},
+        )
+    else:
+        tc = TraceCollector(session_id=session_id or "", request_message=message, agent_name="rule_agent")
+        agent_span = tc.root
+
     state: RuleState = {
         "user_message": message,
         "conversation_history": history or [],
         "reply": "",
         "rule_recommendations": [],
         "error": None,
-        "trace_collector": collector,
-        "trace_span": collector.root,
+        "trace_collector": tc,
+        "trace_span": agent_span,
     }
     result = await build_rule_agent().ainvoke(state, {"configurable": {"thread_id": str(uuid.uuid4())}})
-    collector.save_to_db()
+
+    if trace_collector is None:
+        tc.save_to_db()
+    else:
+        agent_span.finish(output={
+            "reply": result.get("reply", ""),
+            "recommendations": len(result.get("rule_recommendations", [])),
+        })
+
     return {
         "reply": result.get("reply", ""),
         "rules": result.get("rule_recommendations", []) or [],
-        "trace_id": collector.trace_id,
+        "trace_id": tc.trace_id,
         "execution_time_ms": round((time.time() - started_at) * 1000, 2),
     }

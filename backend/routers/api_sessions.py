@@ -49,6 +49,7 @@ class MessageResponse(BaseModel):
     rules: list = []
     ask_questions: list = []
     pending_step: str | None = None
+    query_result: dict | None = None
     created_at: str = ""
 
 

@@ -28,7 +28,6 @@ from agents.llm_utils import (
 )
 from core.field_registry import get_schema_for_agent, get_fixed_field_names
 from services.query_preprocessor import ParsedChartRequest, preprocess_chart_query
-from services.dashboard_recommender import dashboard_plan_prompt
 from models import DashboardRequestDraft, PivotConfig
 
 logger = logging.getLogger("chart_agent")
@@ -95,6 +94,7 @@ def _build_dashboard_questionnaire() -> list[dict]:
         {"id": "task_id", "question": "关联哪个任务？", "type": "select", "options_api": "/api/functions/tasks", "options": [], "placeholder": "", "required": True},
         {"id": "rule_list", "question": "可用规则", "type": "rule_list", "options_api": "/api/functions/rules", "options": [], "placeholder": "", "required": False, "depends_on": "task_id"},
         {"id": "signal_list", "question": "可用信号", "type": "signal_list", "options_api": "/api/functions/signals", "options": [], "placeholder": "", "required": False, "depends_on": ["task_id", "rule_list"]},
+        {"id": "date", "question": "需要什么时间范围？", "type": "date-range", "placeholder": "", "required": True},
         {"id": "chart_slots", "question": "图表配置", "type": "chart_slots", "options": [], "placeholder": "", "required": True, "depends_on": "chart_count"},
     ]
 
@@ -143,7 +143,7 @@ PivotConfig 核心 4 属性：
 - alias: 显示别名（必填）
 - aggregation: source / day / week / month / year（仅时间字段可用）
 
-## legend（列维度/图例，默认不指定）
+## legend（列维度/图例，默认不填，除非用户明确指定）
 - field: 字段名（必填）
 - alias: 显示别名（必填）
 
@@ -209,7 +209,7 @@ def _deep_normalize_chart(chart: dict[str, Any], parsed: ParsedChartRequest | No
     if not pc or not isinstance(pc, dict):
         return chart
     if parsed:
-        pc["chart_type"] = parsed.explicit_chart_type or chart.get("chart_type", "bar")
+        pc["chart_type"] = parsed.explicit_chart_type or chart.get("chart_type", "")
         chart["chart_type"] = pc["chart_type"]
         pass
     fixed_names = _get_fixed_names()
@@ -278,22 +278,6 @@ def _normalize_charts_from_output(response: AgentOutput, parsedList: list[Parsed
         charts = enumerate([c.model_dump() for c in response.charts])
         return [_deep_normalize_chart(ch, parsedList[i]) for i, ch in charts]
     return []
-
-
-def _dashboard_draft_prompt(draft: dict[str, Any]) -> str:
-    """将前端确认的结构化看板选择作为事实注入，不再从自由文本反解析。"""
-    parsed = DashboardRequestDraft.model_validate(draft)
-    slots = "\n".join(
-        f"- 图表{slot.index}：{slot.description or '由业务目标推荐'}；偏好图形：{slot.preferred_chart_type or '自动'}"
-        for slot in parsed.chart_slots
-    ) or "- 未填写图表槽位，请按业务目标补齐。"
-    return (
-        "## 已确认的看板草案（必须遵守）\n"
-        f"- 业务目标：{parsed.goal}\n- TASK_ID：{parsed.task_id}\n- 图表数量：{parsed.chart_count}\n"
-        f"- 已选规则 ID：{parsed.rule_ids}\n- 已选信号：{parsed.signal_names}\n"
-        f"- 时间范围：{parsed.time_range or '未指定'}\n- 图表槽位：\n{slots}\n"
-        "必须恰好生成所需数量的图表；图表不得重复，且共享的任务/时间范围保持一致。"
-    )
 
 
 def _validate_chart(chart: dict[str, Any]) -> str | None:
@@ -429,10 +413,20 @@ def analyze_node(state: ChartState) -> ChartState:
             parsedList.append(parsed)
             if parsed_text:
                 system_parts.append(parsed_text)
-
-        if _draft:
-            system_parts.append(_dashboard_draft_prompt(_draft))
-            system_parts.append(dashboard_plan_prompt(DashboardRequestDraft.model_validate(_draft)))
+        else:
+            slots = _draft.get('chart_slots', [])
+            for sl in slots:
+                if isinstance(sl, dict):
+                    raw = sl.get('description') or sl.get('dimension') or ''
+                else:
+                    raw = str(sl) if sl else ''
+                if not isinstance(raw, str):
+                    raw = str(raw)
+                slot_text = raw.strip()
+                if slot_text:
+                    parsed = preprocess_chart_query(slot_text)
+                    parsed_text = parsed.to_prompt_section()
+                    parsedList.append(parsed)
 
         if state.get("analyze_retry_count", 0) > 0 and state.get("validation_error"):
             system_parts.append(
@@ -451,7 +445,12 @@ def analyze_node(state: ChartState) -> ChartState:
             messages.append(h)
         messages.append({"role": "user", "content": state["user_message"]})
 
+        # 记录 LLM 输入消息（完整 prompt）
+        if sp:
+            sp.messages = list(messages)
+
         response = call_structured(AgentOutput, messages)
+        llm_raw_content = None
 
         if response is None:
             # 回退：PydanticOutputParser + try_parse_json 手动解析
@@ -464,6 +463,11 @@ def analyze_node(state: ChartState) -> ChartState:
             raw_llm = get_llm()
             raw_resp2 = raw_llm.invoke(fallback_messages)
             raw_content = raw_resp2.content.strip()
+            llm_raw_content = raw_content
+            if sp:
+                # 更新 messages 为 fallback 版本的完整输入消息
+                sp.messages = list(fallback_messages)
+                sp.output = {"llm_raw_content": raw_content}
             try:
                 response = parser.parse(raw_content)
             except Exception as parse_err:
@@ -476,10 +480,14 @@ def analyze_node(state: ChartState) -> ChartState:
                 )
 
         if sp:
-            sp.messages = list(messages)
-            sp.tokens = {"input": -1, "output": -1}
-            sp.output = response.model_dump()
-        # print(response)
+            # 记录 LLM 输出消息（原始完整内容）
+            # 如果 fallback 路径已经设置了 sp.output，追加 structured
+            existing = sp.output or {}
+            sp.output = {
+                **existing,
+                "structured": response.model_dump(),
+                "llm_raw_content": existing.get("llm_raw_content") or llm_raw_content,
+            }
         state["reply"] = response.reply
         state["suggestions"] = response.suggestions or []
         state["charts"] = _normalize_charts_from_output(response, parsedList)
@@ -501,9 +509,14 @@ def analyze_node(state: ChartState) -> ChartState:
         if sp:
             sp.finish(error=str(e))
 
-
     if sp and state.get("error") is None and sp.status == "in_progress":
-        sp.finish(output={"reply": state.get("reply"), "chart_count": len(state.get("charts", []))})
+        prev_out = sp.output or {}
+        sp.finish(output={
+            "reply": state.get("reply"),
+            "chart_count": len(state.get("charts", [])),
+            "structured": prev_out.get("structured"),
+            "llm_raw_content": prev_out.get("llm_raw_content"),
+        })
 
     return state
 
@@ -512,7 +525,9 @@ def validate_config_node(state: ChartState) -> ChartState:
     """校验节点：校验 charts 配置合法性，不通过则回流 analyze 重试（最多 1 次）"""
     tc: TraceCollector | None = state.get("trace_collector")
     parent_span: SpanNode | None = state.get("trace_span")
-    sp = parent_span.add_child("validate", "chain", input={"chart_count": len(state.get("charts", []))}) if (tc and parent_span) else None
+    sp = parent_span.add_child("validate", "chain", input={
+        "charts": state.get("charts", []),
+    }) if (tc and parent_span) else None
 
     # 问卷模式：跳过校验，直接返回（charts 必然为空，校验必失败）
     if state.get("pending_step") == "awaiting_questions":
@@ -523,11 +538,11 @@ def validate_config_node(state: ChartState) -> ChartState:
     # trace_log 已废弃，日志由 TraceCollector 管理
 
     err = _validate_charts(state["charts"])
-    draft = state.get("dashboard_draft")
-    if err is None and draft:
-        expected_count = DashboardRequestDraft.model_validate(draft).chart_count
-        if len(state["charts"]) != expected_count:
-            err = f"看板草案要求生成 {expected_count} 个图表，实际生成 {len(state['charts'])} 个"
+    # draft = state.get("dashboard_draft")
+    # if err is None and draft:
+    #     expected_count = DashboardRequestDraft.model_validate(draft).chart_count
+    #     if len(state["charts"]) != expected_count:
+    #         err = f"看板草案要求生成 {expected_count} 个图表，实际生成 {len(state['charts'])} 个"
     if err is None:
         state["validation_error"] = None
 
@@ -584,8 +599,11 @@ def execute_node(state: ChartState) -> ChartState:
             chart["sql"] = res.get("sql")
             chart["error"] = None
             api_outputs.append({
-                "data_count": len(res.get("data", [])),
+                "data": res.get("data", []),
                 "columns": res.get("columns", []),
+                "total": res.get("total", 0),
+                "vega_spec": res.get("vega_spec", {}),
+                "config": res.get("config"),
                 "sql": res.get("sql", ""),
                 "execution_time_ms": res.get("execution_time_ms", 0),
             })
@@ -624,7 +642,7 @@ def format_reply_node(state: ChartState) -> ChartState:
     """格式化回复节点：构造最终回复并保存日志"""
     tc: TraceCollector | None = state.get("trace_collector")
     parent_span: SpanNode | None = state.get("trace_span")
-    sp = parent_span.add_child("format_reply", "chain", input={"reply_preview": state.get("reply", "")[:100], "suggestions": state.get("suggestions", [])}) if (tc and parent_span) else None
+    sp = parent_span.add_child("format_reply", "chain", input={"reply": state.get("reply", ""), "suggestions": state.get("suggestions", [])}) if (tc and parent_span) else None
 
     # trace_log 已废弃，日志由 TraceCollector 管理
 
@@ -646,15 +664,7 @@ def format_reply_node(state: ChartState) -> ChartState:
         state["reply"] = (state.get("reply") or "") + "\n\n" + " ".join(summary_parts)
 
     if sp:
-        sp.finish(output={"reply": state.get("reply", "")[:200], "suggestions": state.get("suggestions", [])})
-
-    # Save root span and mark status
-    if tc:
-        has_error = bool(state.get("error")) or bool(chart_errors)
-        if has_error:
-            tc.root.finish(error=state.get("error") or "; ".join([ch.get("error", "") for i, ch in chart_errors]))
-        else:
-            tc.root.finish(output={"reply": state.get("reply", "")[:200], "charts": len(charts)})
+        sp.finish(output={"reply": state.get("reply", ""), "suggestions": state.get("suggestions", [])})
 
     log_path = _save_trace_log(state)
     return state
@@ -725,19 +735,34 @@ async def process_chart(
     session_id: str | None = None,
     intent: str = "chart",
     dashboard_draft: dict[str, Any] | None = None,
+    trace_collector: TraceCollector | None = None,
+    parent_span: SpanNode | None = None,
 ) -> dict[str, Any]:
-    """处理图表分析请求"""
+    """处理图表分析请求
+
+    Args:
+        trace_collector: 来自 pivot_agent 的 TraceCollector（实现全链路追踪）
+        parent_span: 父级 Span（chart_agent 整体作为根的一个子 Span）
+    """
     import uuid
     import time
 
     start = time.time()
 
-    # 创建 TraceCollector
-    tc = TraceCollector(
-        session_id=session_id or "",
-        request_message=message,
-        agent_name="chart_agent",
-    )
+    # 如果从 pivot_agent 继承了 tc，创建子 span；否则自建 TraceCollector
+    if trace_collector and parent_span:
+        tc = trace_collector
+        agent_span = parent_span.add_child(
+            "chart_agent", "agent",
+            input={"message": message, "intent": intent, "session_id": session_id},
+        )
+    else:
+        tc = TraceCollector(
+            session_id=session_id or "",
+            request_message=message,
+            agent_name="chart_agent",
+        )
+        agent_span = tc.root
 
     agent = build_chart_agent()
     thread_id = str(uuid.uuid4())
@@ -754,7 +779,7 @@ async def process_chart(
         "execute_retry_count": 0,
         "execution_error": None,
         "trace_collector": tc,
-        "trace_span": tc.root,
+        "trace_span": agent_span,
         "intent": "dashboard" if dashboard_draft else intent,
         "dashboard_draft": dashboard_draft,
     }
@@ -762,8 +787,21 @@ async def process_chart(
     config = {"configurable": {"thread_id": thread_id}}
     result = await agent.ainvoke(state, config)
 
-    # 保存完整 trace 到数据库
-    tc.save_to_db()
+    # 子 span 结束
+    has_error = bool(result.get("error")) or bool(
+        [ch for ch in (result.get("charts") or []) if ch.get("error")]
+    )
+    if has_error:
+        agent_span.finish(error=result.get("error") or "部分图表执行失败")
+    else:
+        agent_span.finish(output={
+            "reply": result.get("reply", ""),
+            "charts": len(result.get("charts") or []),
+        })
+
+    # 如果自建了 tc 才保存（从 pivot_agent 继承的不负责保存）
+    if trace_collector is None:
+        tc.save_to_db()
 
     elapsed = (time.time() - start) * 1000
 

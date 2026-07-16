@@ -170,6 +170,10 @@ def init_db():
         conn.execute("ALTER TABLE chat_messages ADD COLUMN rules_json TEXT")
     except Exception:
         pass
+    try:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN query_result_json TEXT")
+    except Exception:
+        pass
     seed_default_users()
     # 迁移：给 charts 加 board_id 列（幂等）
     try:
@@ -414,7 +418,7 @@ def delete_session(session_id: str):
 
 def get_messages(session_id: str) -> list[dict]:
     cur = _get_conn().execute(
-        "SELECT id, session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step, created_at "
+        "SELECT id, session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step, query_result_json, created_at "
         "FROM chat_messages WHERE session_id = ? ORDER BY id ASC",
         (session_id,),
     )
@@ -449,23 +453,32 @@ def get_messages(session_id: str) -> list[dict]:
                 msg["ask_questions"] = []
         else:
             msg["ask_questions"] = []
+        if msg["query_result_json"]:
+            try:
+                msg["query_result"] = json.loads(msg["query_result_json"])
+            except json.JSONDecodeError:
+                msg["query_result"] = None
+        else:
+            msg["query_result"] = None
         del msg["charts_json"]
         del msg["suggestions_json"]
         del msg["rules_json"]
         del msg["ask_questions_json"]
+        del msg["query_result_json"]
         result.append(msg)
     return result
 
 
-def add_message(session_id: str, role: str, content: str, charts: list = None, suggestions: list = None, ask_questions: list = None, pending_step: str = None, rules: list = None):
+def add_message(session_id: str, role: str, content: str, charts: list = None, suggestions: list = None, ask_questions: list = None, pending_step: str = None, rules: list = None, query_result: dict = None):
     charts_json = json.dumps(charts, ensure_ascii=False) if charts else None
     suggestions_json = json.dumps(suggestions, ensure_ascii=False) if suggestions else None
     ask_questions_json = json.dumps(ask_questions, ensure_ascii=False) if ask_questions else None
     rules_json = json.dumps(rules, ensure_ascii=False) if rules else None
+    query_result_json = json.dumps(query_result, ensure_ascii=False) if query_result else None
     conn = _get_conn()
     conn.execute(
-        "INSERT INTO chat_messages (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step),
+        "INSERT INTO chat_messages (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step, query_result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, role, content, charts_json, suggestions_json, rules_json, ask_questions_json, pending_step, query_result_json),
     )
     conn.execute(
         "UPDATE chat_sessions SET updated_at = datetime('now','localtime') WHERE id = ?",

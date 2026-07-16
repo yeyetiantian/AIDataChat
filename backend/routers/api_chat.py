@@ -98,7 +98,8 @@ async def chat_query(request: ChatRequest):
             add_message(session_id, "assistant", reply, charts, suggestions,
                         ask_questions=result.get("ask_questions", []),
                         pending_step=result.get("pending_step"),
-                        rules=result.get("rules", []))
+                        rules=result.get("rules", []),
+                        query_result=result.get("query_result"))
 
             # 如果这是第一条用户消息，自动设置标题
             if user_msg_total == 1:
@@ -120,6 +121,7 @@ async def chat_query(request: ChatRequest):
             ask_questions=result.get("ask_questions", []) or [],
             pending_step=result.get("pending_step"),
             dashboard_draft_id=dashboard_draft_id,
+            query_result=result.get("query_result"),
         )
     except Exception as e:
         logger.error("聊天分析失败: %s", e, exc_info=True)

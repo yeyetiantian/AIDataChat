@@ -111,3 +111,4 @@ class ChatResponse(BaseModel):
     ask_questions: list[dict[str, Any]] = Field(default_factory=list, description="交互式问卷（需用户进一步输入时返回）")
     pending_step: Optional[str] = Field(None, description="挂起步骤标识（如 awaiting_questions）")
     dashboard_draft_id: str = Field("", description="结构化看板草案 ID")
+    query_result: Optional[dict[str, Any]] = Field(None, description="DTC 数据查询结果（含 sql/columns/rows/total）")

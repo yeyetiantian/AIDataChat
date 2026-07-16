@@ -1,32 +1,96 @@
-"""用户查询预处理器 — 用规则代码从自然语言中提取结构化图表需求。
-
-输出的 ParsedChartRequest 注入到 LLM prompt 中，
-让 LLM 只需做 "结构化描述 → PivotConfig" 的映射，不必从自由文本中理解语义。
-"""
-
 from __future__ import annotations
-
 import re
+import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, List, Tuple, Set, Optional
 
+# ====================== 全局常量统一管理（消除魔法字符串）======================
+BRACKET_OPEN = r'[\[【({]'
+BRACKET_CLOSE = r'[\]】)}]'
+BRACKET_PATTERN = re.compile(rf'({BRACKET_OPEN})(.*?)({BRACKET_CLOSE})')
+SPLIT_SEP_PAT = re.compile(r'[，,、]')
 
+AXIS_KEYWORDS = ("横轴", "x轴", "X轴", "横坐标")
+VALUE_KEYWORDS = ("纵轴", "y轴", "Y轴", "竖轴", "纵坐标")
+LEGEND_KEYWORDS = ("图例", "分组", "区分")
+
+CHART_TYPE_MAP = {
+    "柱状": "bar", "柱状图": "bar",
+    "折线": "line", "折线图": "line",
+    "饼图": "pie",
+    "雷达": "radar", "雷达图": "radar",
+    "散点": "point", "散点图": "point",
+    "面积": "area", "面积图": "area", "区域": "area", "区域图": "area",
+}
+GRANULARITY_MAP = {
+    "每天": "day", "每日": "day", "按天": "day", "逐天": "day",
+    "每周": "week", "按周": "week",
+    "每月": "month", "按月": "month",
+    "每年": "year", "逐年": "year",
+}
+
+# 日志工具
+logger = logging.getLogger("chart_preprocessor")
+
+# ====================== 通用工具函数（统一封装、增加校验）======================
+def extract_all_bracket_blocks(text: str) -> List[Tuple[str, str, int]]:
+    """提取所有完整括号块 (完整括号文本, 内部内容, 起始下标)"""
+    res = []
+    for match in BRACKET_PATTERN.finditer(text):
+        full_block = match.group(0)
+        inner = match.group(2).strip()
+        start_idx = match.start()
+        res.append((full_block, inner, start_idx))
+    return res
+
+def split_bracket_fields(inner_text: str) -> List[str]:
+    """拆分括号内字段，过滤空字符串"""
+    raw_parts = SPLIT_SEP_PAT.split(inner_text)
+    parts = [p.strip() for p in raw_parts if p.strip()]
+    return parts
+
+def unique_append(target_list: List[str], items: List[str]) -> None:
+    """去重追加字符串列表"""
+    exist = set(target_list)
+    for item in items:
+        if item and item not in exist:
+            target_list.append(item)
+            exist.add(item)
+
+def unique_append_metric(target_metrics: List[dict], mapped: dict) -> None:
+    """指标字典去重追加"""
+    label = mapped.get("label", "")
+    if not any(m["label"] == label for m in target_metrics):
+        target_metrics.append(mapped)
+
+def find_all_matches(pattern: str, text: str, group_idx: int = 1) -> List[str]:
+    pat = re.compile(pattern)
+    results = []
+    for m in pat.finditer(text):
+        try:
+            val = m.group(group_idx).strip()
+            if val:
+                results.append(val)
+        except IndexError:
+            continue
+    return results
+
+def is_signal_bracket(full_text: str, block_start: int, full_text_all: str) -> bool:
+    """判断括号是否属于 信号[]"""
+    prefix = full_text_all[max(0, block_start - 6): block_start]
+    return "信号" in prefix
+
+# ====================== 数据模型 ======================
 class ParsedChartRequest:
-    """预解析的结构化图表请求
-
-    所有字段均由规则代码从用户输入中提取，
-    LLM 只需参照此结构生成 PivotConfig。
-    """
-
     def __init__(self) -> None:
-        self.explicit_chart_type: str | None = None
-        self.time_field: str | None = None
-        self.time_range: dict[str, str] | None = None
-        self.group_by_fields: list[str] = []
-        self.legend_field: str | None = None
-        self.metrics: list[dict[str, str]] = []
-        self.task_ref: str | None = None
-        self.rule_name: str | None = None
+        self.explicit_chart_type: Optional[str] = None
+        self.time_field: Optional[str] = None
+        self.time_range: Optional[dict[str, str]] = None
+        self.group_by_fields: List[str] = []
+        self.legend_field: Optional[str] = None
+        self.metrics: List[dict[str, str]] = []
+        self.task_ref: Optional[str] = None
+        self.rule_name: Optional[str] = None
 
     def is_empty(self) -> bool:
         return not any([
@@ -37,13 +101,9 @@ class ParsedChartRequest:
         ])
 
     def to_prompt_section(self) -> str:
-        """渲染为 LLM prompt 中可以嵌入的段落"""
         if self.is_empty():
             return ""
-
-        lines = [
-            "# Parsed User Request（已从原文解析，请严格参照生成 PivotConfig）\n"
-        ]
+        lines = ["# Parsed User Request（已从原文解析，请严格参照生成 PivotConfig）\n"]
         if self.explicit_chart_type:
             lines.append(f"- 图表类型: {self.explicit_chart_type}（用户明确要求，必须严格使用）")
         if self.time_range:
@@ -57,144 +117,17 @@ class ParsedChartRequest:
             items = "、".join(self.group_by_fields)
             lines.append(f"- 行维度（axes）: {items}")
         if self.legend_field:
-            lines.append(f"- 图例/列维度（legend）: {self.legend_field}")
-        if self.metrics:
-            for m in self.metrics:
-                lines.append(
-                    f"- 指标: 度量名={m.get('label', '')}, 聚合={m.get('aggregation', 'source')}"
-                )
+            lines.append(f"- 图例（legend）: {self.legend_field}")
+        for m in self.metrics:
+            lines.append(f"- 指标（values）: 度量名={m.get('label', '')}, 聚合={m.get('aggregation', 'source')}")
         if self.task_ref:
-            lines.append(f"- 引用任务: {self.task_ref}（需映射到 TASK_ID 筛选条件）")
-        if self.rule_name:
-            lines.append(f"- 引用规则: {self.rule_name}")
-
+            lines.append(f"- 引用任务: {self.task_ref}")
         return "\n".join(lines)
 
-
-# ============================================================
-# 规则引擎
-# ============================================================
-
-_CHART_TYPE_MAP = {
-    "柱状": "bar", "柱状图": "bar",
-    "折线": "line", "折线图": "line",
-    "饼图": "pie",
-    "雷达": "radar", "雷达图": "radar",
-    "散点": "point", "散点图": "point",
-    "面积": "area", "面积图": "area",
-}
-
-_GRANULARITY_MAP = {
-    "每天": "day", "每日": "day", "按天": "day", "逐天": "day",
-    "每周": "week", "按周": "week",
-    "每月": "month", "按月": "month",
-    "每年": "year", "逐年": "year",
-}
-
-
-def _extract_chart_type(pq: ParsedChartRequest, text: str) -> None:
-    for kw, ct in _CHART_TYPE_MAP.items():
-        if kw in text:
-            pq.explicit_chart_type = ct
-            return
-
-
-def _extract_time_range(pq: ParsedChartRequest, text: str) -> None:
-    patterns = [
-        r"从?(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[~至到\-]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[0-1]?\d[-/.]\d{1,2})",
-        r"(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[至到~\-]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[0-1]?\d[-/.]\d{1,2})",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            start = m.group(1).replace("/", "-").replace(".", "-")
-            end_raw = m.group(2)
-            if end_raw.replace("-", "/").replace(".", "/").count("/") == 1:
-                year = start[:4]
-                end = f"{year}-{end_raw.replace('/', '-').replace('.', '-')}"
-            else:
-                end = end_raw.replace("/", "-").replace(".", "-")
-            pq.time_range = {"start": start, "end": end, "granularity": "day"}
-            pq.time_field = "报警日期"
-            break
-
-    for kw, gran in _GRANULARITY_MAP.items():
-        if kw in text:
-            if pq.time_range:
-                pq.time_range["granularity"] = gran
-            break
-
-    # 相对时间范围（如"最近一周"、"最近30天"）
-    if pq.time_range is None:
-        relative_patterns = [
-            (r"最近(\d+)天", "day", lambda n: timedelta(days=n)),
-            (r"最近(\d+)周", "week", lambda n: timedelta(weeks=n)),
-            (r"最近(\d+)个月", "month", lambda n: timedelta(days=n * 30)),
-            (r"最近一周", "day", lambda _: timedelta(weeks=1)),
-            (r"最近一个月", "day", lambda _: timedelta(days=30)),
-            (r"近(\d+)天", "day", lambda n: timedelta(days=n)),
-            (r"近一周", "day", lambda _: timedelta(weeks=1)),
-            (r"本月", "month", None),
-        ]
-        for pat, gran, delta_fn in relative_patterns:
-            m = re.search(pat, text)
-            if m:
-                today = datetime.now()
-                if delta_fn:
-                    n = int(m.group(1)) if m.lastindex and m.group(1) else 1
-                    start = (today - delta_fn(n)).strftime("%Y-%m-%d")
-                    end = today.strftime("%Y-%m-%d")
-                else:
-                    start = today.replace(day=1).strftime("%Y-%m-%d")
-                    end = today.strftime("%Y-%m-%d")
-                pq.time_range = {"start": start, "end": end, "granularity": gran}
-                pq.time_field = "报警日期"
-                break
-
-
-def _extract_legend(pq: ParsedChartRequest, text: str) -> None:
-    patterns = [
-        r"用(.+?)(做|作为|为)(图例|分组)",
-        r"按(.+?)(做|作为|为)?(图例|分组|区分)",
-        r"以(.+?)(为)?(图例|分组)",
-        r"按(.+?)统计",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            field = m.group(1).strip()
-            if "规则" in field:
-                pq.legend_field = "规则名称"
-            elif "车型" in field or "车" in field:
-                pq.legend_field = "车型"
-            elif "任务" in field:
-                pq.legend_field = "任务名称"
-            elif "类型" in field or "分类" in field:
-                pq.legend_field = "规则类型"
-            else:
-                pq.legend_field = field
-            return
-
-
-def _extract_metrics(pq: ParsedChartRequest, text: str) -> None:
-    if re.search(r"报警(次数|数量|总数|量|频次)", text):
-        pq.metrics.append({"label": "报警次数", "aggregation": "count"})
-
-    # 时长相关（含独立关键词）
-    if "时长" in text or "持续时间" in text or "最长时间" in text or "最短时间" in text or "平均时长" in text:
-        label = "平均时长"
-        agg = "avg"
-        if "最大" in text or "最长" in text:
-            label, agg = "最长时间", "max"
-        elif "最小" in text or "最短" in text:
-            label, agg = "最短时间", "min"
-        pq.metrics.append({"label": label, "aggregation": agg})
-
-
+# ====================== 字段映射工具 ======================
 def _map_value_field(field: str) -> dict[str, str]:
-    """将用户描述的纵轴字段映射为内部指标名"""
     if "报警" in field and ("次数" in field or "数量" in field or "频次" in field or "总数" in field):
-        return {"label": "报警时间", "aggregation": "count"}
+        return {"label": "报警次数", "aggregation": "count"}
     if "时长" in field or "持续时间" in field or "时间" in field:
         if "平均" in field:
             return {"label": "平均时长", "aggregation": "avg"}
@@ -207,94 +140,179 @@ def _map_value_field(field: str) -> dict[str, str]:
         return {"label": "占比", "aggregation": "count"}
     return {"label": field, "aggregation": "source"}
 
+# ====================== 各提取器拆分（解耦，单独可复用）======================
+def extract_chart_type(pq: ParsedChartRequest, text: str) -> None:
+    for kw, ct in CHART_TYPE_MAP.items():
+        if kw in text:
+            pq.explicit_chart_type = ct
+            logger.debug(f"识别图表类型 {kw} → {ct}")
+            return
 
-def _extract_group_by(pq: ParsedChartRequest, text: str) -> None:
-    # 横轴/X轴/横坐标 → 归到 axes
-    _axes_patterns = [
-        (r'(?:横轴|x轴|X轴|横坐标)[:：=为是]?\s*(?!信号)(.+?)(?=[，,。、\s]|$)', 1),
-        (r'以(.+?)为(?:横轴|x轴|X轴|横坐标)', 1),
+def extract_time_range(pq: ParsedChartRequest, text: str) -> None:
+    abs_patterns = [
+        r"从?(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[~至到\-]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[0-1]?\d[-/.]\d{1,2})",
+        r"(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*[至到~\-]\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|[0-1]?\d[-/.]\d{1,2})",
     ]
-    for pat, group_idx in _axes_patterns:
+    for pat in abs_patterns:
         m = re.search(pat, text)
         if m:
-            field = m.group(group_idx).strip().lstrip("=：:，,。 ")
-            if field and field not in pq.group_by_fields:
-                pq.group_by_fields.append(field)
+            start = m.group(1).replace("/", "-").replace(".", "-")
+            end_raw = m.group(2)
+            if end_raw.replace("-", "/").replace(".", "/").count("/") == 1:
+                end = f"{start[:4]}-{end_raw.replace('/', '-').replace('.', '-')}"
+            else:
+                end = end_raw.replace("/", "-").replace(".", "-")
+            pq.time_range = {"start": start, "end": end, "granularity": "day"}
+            pq.time_field = "报警日期"
+            logger.debug(f"识别绝对时间范围 {start} ~ {end}")
+            break
+    for kw, gran in GRANULARITY_MAP.items():
+        if kw in text and pq.time_range:
+            pq.time_range["granularity"] = gran
+            logger.debug(f"识别时间粒度 {kw} → {gran}")
+            break
+    if pq.time_range is None:
+        rel_patterns = [
+            (r"最近(\d+)天", "day", lambda n: timedelta(days=n)),
+            (r"最近(\d+)周", "week", lambda n: timedelta(weeks=n)),
+            (r"最近(\d+)个月", "month", lambda n: timedelta(days=n * 30)),
+            (r"最近一周", "day", lambda _: timedelta(weeks=1)),
+            (r"最近一个月", "day", lambda _: timedelta(days=30)),
+            (r"近(\d+)天", "day", lambda n: timedelta(days=n)),
+            (r"近一周", "day", lambda _: timedelta(weeks=1)),
+            (r"本月", "month", None),
+        ]
+        today = datetime.now()
+        for pat, gran, delta_fn in rel_patterns:
+            m = re.search(pat, text)
+            if m:
+                if delta_fn:
+                    n = int(m.group(1)) if m.lastindex and m.group(1) else 1
+                    start = (today - delta_fn(n)).strftime("%Y-%m-%d")
+                else:
+                    start = today.replace(day=1).strftime("%Y-%m-%d")
+                end = today.strftime("%Y-%m-%d")
+                pq.time_range = {"start": start, "end": end, "granularity": gran}
+                pq.time_field = "报警日期"
+                logger.debug(f"识别相对时间 {pat} → {start} ~ {end}")
+                break
 
-    # 信号[...] / 信号【...】 / 信号“...” → 解析出信号名，每个独立加到 axes
-    _signal_patterns = [
-        r'信号\[([^\]]+?)\]',        # 信号[Hev,Hds]
-        r'信号【([^】]+?)】',        # 信号【Hev】
-        r'信号[“"]([^”"]+?)[”"]',   # 信号"Hev,Hds"
-        r'信号（([^）]+?)）',        # 信号（Hev）
+def extract_legend(pq: ParsedChartRequest, text: str) -> None:
+    patterns = [
+        r"用(.+?)(做|作为|为)(图例|分组)",
+        r"按(.+?)(做|作为|为)?(图例|分组|区分)",
+        r"以(.+?)(为)?(图例|分组)",
     ]
-    for sp in _signal_patterns:
-        for m in re.finditer(sp, text):
-            content = m.group(1).strip()
-            # 按分隔符拆分：逗号/顿号/斜杠/反斜杠/空白
-            names = re.split(r'[,，、/\\\\\s]+', content)
-            for name in names:
-                name = name.strip()
-                if name and name not in pq.group_by_fields:
-                    pq.group_by_fields.append(name)
-
-    # 纵轴/Y轴/竖轴 → 归到 values/metrics
-    _values_patterns = [
-        (r'(?:纵轴|y轴|Y轴|竖轴)[:：=为是]?\s*(.+?)(?=[，,。、\s]|$)', 1),
-        (r'以(.+?)为(?:纵轴|y轴|Y轴|竖轴|纵坐标)', 1),
-    ]
-    for pat, group_idx in _values_patterns:
+    for pat in patterns:
         m = re.search(pat, text)
         if m:
-            field = m.group(group_idx).strip().lstrip("=：:，,。 ")
-            # 同样截断到逗号前，避免捕获后半句
-            cut_pos = len(field)
-            for sep in ["，", ",", "、"]:
-                pos = field.find(sep)
-                if 0 < pos < cut_pos:
-                    cut_pos = pos
-            field = field[:cut_pos].strip()
-            if field:
-                # 映射到已知指标名
-                mapped = _map_value_field(field)
-                if not any(me.get("label") == mapped["label"] for me in pq.metrics):
-                    pq.metrics.append(mapped)
+            raw = m.group(1).strip()
+            # 兼容括号内信号作为图例
+            blocks = extract_all_bracket_blocks(raw)
+            if blocks:
+                inner = blocks[0][1]
+                fields = split_bracket_fields(inner)
+                pq.legend_field = ",".join(fields)
+            else:
+                if "规则" in raw:
+                    pq.legend_field = "规则名称"
+                elif "车型" in raw or "车" in raw:
+                    pq.legend_field = "车型"
+                elif "任务" in raw:
+                    pq.legend_field = "任务名称"
+                elif "类型" in raw or "分类" in raw:
+                    pq.legend_field = "规则类型"
+                else:
+                    pq.legend_field = raw
+            logger.debug(f"识别图例 {pq.legend_field}")
+            return
 
-    if re.search(r"(每天|每日|按天|逐天)", text):
-        pq.group_by_fields.append("报警日期")
-    if re.search(r"各车型|按车型|分车型", text):
-        pq.group_by_fields.append("车型")
-    if re.search(r"各任务|按任务", text):
-        pq.group_by_fields.append("任务名称")
-    if re.search(r"各规则|按规则", text):
-        if "规则名称" not in pq.group_by_fields:
-            pq.group_by_fields.append("规则名称")
-
-
-def _extract_task(pq: ParsedChartRequest, text: str) -> None:
-    # [任务名_ID] 格式
-    m = re.search(r'\[(.+?)_(\d+)\]', text)
-    if m:
-        pq.task_ref = m.group(1).strip()
-        return
-    # TASK_ID=123 或 task:123
+def extract_task(pq: ParsedChartRequest, text: str) -> None:
+    all_blocks = extract_all_bracket_blocks(text)
+    for full_block, bracket_text, start_idx in all_blocks:
+        if is_signal_bracket(full_block, start_idx, text):
+            continue
+        task_match = re.search(r'(.+?)_\d+(?:_\d+)*$', bracket_text)
+        if task_match:
+            pq.task_ref = task_match.group(1).strip()
+            logger.debug(f"从括号识别任务 {pq.task_ref}")
+            return
     m = re.search(r'(?:TASK[_\s]?ID|task[_\s]?id)\s*[=:]\s*(\d+)', text)
     if m:
         pq.task_ref = f"TASK_ID={m.group(1)}"
+        logger.debug(f"识别数字任务ID {pq.task_ref}")
         return
-    # "针对/关联/属于/在 任务：名称" 的显式引用（排除"各任务""按任务"等分组语义）
-    m = re.search(r'(?:针对|关联|属于|在|分析)\s*任务\s*[：:]\s*(.+?)(?:[，,。\s]|$)', text)
+    m = re.search(r'(?:针对|关联|属于|在|分析)(?!按|各|每个)\s*任务\s*[：:]\s*(.+?)(?=[，,。、]|$)', text)
     if m:
-        pq.task_ref = m.group(1).strip()
+        raw_task = m.group(1).strip()
+        clean_task = raw_task.lstrip("=：:，,。、").rstrip("=：:，,。、")
+        if clean_task:
+            pq.task_ref = clean_task
+            logger.debug(f"自然语言识别任务 {pq.task_ref}")
 
+def extract_signal_fields(pq: ParsedChartRequest, text: str) -> None:
+    """统一信号提取入口，兼容前置横轴/纵轴、后置句式、裸信号"""
+    # 1. 前置句式：横轴信号[...] / 纵轴信号[...]
+    axis_pat = rf'(?:{"|".join(AXIS_KEYWORDS)})[:：=为是]?\s*信号\s*({BRACKET_OPEN}.*?{BRACKET_CLOSE})'
+    axis_brackets = find_all_matches(axis_pat, text, 1)
+    for bracket_str in axis_brackets:
+        inner = BRACKET_PATTERN.search(bracket_str).group(2).strip()
+        fields = split_bracket_fields(inner)
+        unique_append(pq.group_by_fields, fields)
+        logger.debug(f"横轴提取字段 {fields}")
 
+    val_pat = rf'(?:{"|".join(VALUE_KEYWORDS)})[:：=为是]?\s*信号\s*({BRACKET_OPEN}.*?{BRACKET_CLOSE})'
+    val_brackets = find_all_matches(val_pat, text, 1)
+    for bracket_str in val_brackets:
+        inner = BRACKET_PATTERN.search(bracket_str).group(2).strip()
+        fields = split_bracket_fields(inner)
+        for f in fields:
+            unique_append_metric(pq.metrics, _map_value_field(f))
+        logger.debug(f"纵轴提取指标 {fields}")
+
+    # 2. 后置句式：[xxx] 作为横轴
+    post_axis_pat = rf'({BRACKET_OPEN}.*?{BRACKET_CLOSE})\s*(?:作为|为|是)\s*(?:{"|".join(AXIS_KEYWORDS)})'
+    post_axis_matches = find_all_matches(post_axis_pat, text, 1)
+    for bracket_str in post_axis_matches:
+        inner = BRACKET_PATTERN.search(bracket_str).group(2).strip()
+        fields = split_bracket_fields(inner)
+        unique_append(pq.group_by_fields, fields)
+        logger.debug(f"后置横轴提取字段 {fields}")
+
+    post_val_pat = rf'({BRACKET_OPEN}.*?{BRACKET_CLOSE})\s*(?:作为|为|是)\s*(?:{"|".join(VALUE_KEYWORDS)})'
+    post_val_matches = find_all_matches(post_val_pat, text, 1)
+    for bracket_str in post_val_matches:
+        inner = BRACKET_PATTERN.search(bracket_str).group(2).strip()
+        fields = split_bracket_fields(inner)
+        for f in fields:
+            unique_append_metric(pq.metrics, _map_value_field(f))
+        logger.debug(f"后置纵轴提取指标 {fields}")
+
+    # 3. 裸信号[]：无横纵轴标识，全部归入values
+    all_blocks = extract_all_bracket_blocks(text)
+    for full_block, inner, start_idx in all_blocks:
+        if not is_signal_bracket(full_block, start_idx, text):
+            continue
+        # 判断括号前方是否已有横纵轴关键词（已处理过的跳过）
+        prefix_text = text[:start_idx]
+        has_axis = any(k in prefix_text for k in AXIS_KEYWORDS)
+        has_val = any(k in prefix_text for k in VALUE_KEYWORDS)
+        if has_axis or has_val:
+            continue
+        fields = split_bracket_fields(inner)
+        for f in fields:
+            unique_append_metric(pq.metrics, _map_value_field(f))
+        logger.debug(f"裸信号提取指标 {fields}")
+
+# ====================== 统一入口 ======================
 def preprocess_chart_query(text: str) -> ParsedChartRequest:
-    """预处理图表查询：规则代码提取 → 结构化中间语言"""
     pq = ParsedChartRequest()
-    _extract_chart_type(pq, text)
-    _extract_time_range(pq, text)
-    _extract_legend(pq, text)
-    _extract_metrics(pq, text)
-    _extract_group_by(pq, text)
-    _extract_task(pq, text)
+    try:
+        extract_chart_type(pq, text)
+        extract_time_range(pq, text)
+        extract_legend(pq, text)
+        extract_task(pq, text)
+        extract_signal_fields(pq, text)
+    except Exception as e:
+        logger.error(f"预处理解析异常 text={text[:200]} err={str(e)}", exc_info=True)
     return pq

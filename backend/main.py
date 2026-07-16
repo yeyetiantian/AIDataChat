@@ -71,6 +71,7 @@ from routers.api_sessions import router as sessions_router
 from routers.api_boards import router as boards_router
 from routers.api_monitor import router as monitor_router
 from routers.api_functions import router as functions_router
+from routers.api_dtc_query import router as dtc_query_router
 app.include_router(chat_router)
 app.include_router(functions_router)
 app.include_router(admin_router)
@@ -80,6 +81,7 @@ app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(boards_router)
 app.include_router(monitor_router)
+app.include_router(dtc_query_router)
 # 生产环境：挂载前端静态文件
 if getattr(sys, "frozen", False):
     _dist_dir = os.path.join(os.path.dirname(sys.executable), "dist")

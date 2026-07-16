@@ -24,6 +24,8 @@ from agents.llm_utils import (
     get_llm,
     get_structured_llm,
     try_parse_json,
+    TraceCollector,
+    SpanNode,
 )
 
 logger = logging.getLogger("pivot_agent")
@@ -34,8 +36,8 @@ logger = logging.getLogger("pivot_agent")
 
 class IntentOutput(BaseModel):
     """意图识别输出"""
-    intent: Literal["chat", "chart", "rule", "dashboard"] = Field(
-        description="用户意图: chat=闲聊, chart=图表分析, rule=规则函数推荐"
+    intent: Literal["chat", "chart", "rule", "dashboard", "dtc"] = Field(
+        description="用户意图: chat=闲聊, chart=图表分析, rule=规则函数推荐, dtc=DTC故障码查询"
     )
     reason: str = Field("", description="意图判断原因")
 
@@ -56,6 +58,7 @@ def _get_intent_system_prompt() -> str:
 - chart: 用户想要查看数据、生成图表、分析趋势、做数据对比等数据可视化或数据查询需求
 - dashboard: 用户想要创建看板、数据大屏、多图表看板，或一次查看多个维度的数据
 - rule: 用户想要了解规则函数、规则配置、规则说明、规则功能解释等规则相关信息
+- dtc: 用户想要查询 DTC 故障码、诊断数据、车辆故障信息、dtc_info 表或 dtc_trigger 表中的数据
 - chat: 普通问候、闲聊、或不属于以上两类的其他问题
 
 ## 示例
@@ -68,6 +71,10 @@ def _get_intent_system_prompt() -> str:
 用户输入: "帮我创建一个看板" → {"intent": "dashboard", "reason": "用户想创建多图表看板"}
 用户输入: "做一个数据大屏展示所有维度的报警情况" → {"intent": "dashboard", "reason": "用户想要一个包含多个图表的大屏看板"}
 用户输入: "我要同时看各车型违规次数和规则类型占比" → {"intent": "dashboard", "reason": "用户一次想看多个维度的图表，适合创建看板"}
+用户输入: "查询VIN为LSGNB8P58TS061027的DTC故障码" → {"intent": "dtc", "reason": "用户想查询特定车辆的DTC故障码数据"}
+用户输入: "看看U0104故障码都出现在哪些车上" → {"intent": "dtc", "reason": "用户想查询特定DTC故障码的车辆分布"}
+用户输入: "DTC触发记录有哪些" → {"intent": "dtc", "reason": "用户想查看DTC触发记录数据"}
+用户输入: "最近一周的DTC报警统计" → {"intent": "dtc", "reason": "用户想查询DTC报警的时间统计"}
 
 请直接返回意图标签和简要原因。"""
     return _intent_system_prompt
@@ -112,7 +119,7 @@ def _recognize_intent(message: str, history: list[dict[str, str]] | None = None)
                 result = try_parse_json(raw_resp.content.strip()) or {}
                 intent_val = result.get("intent", "chat")
                 response = IntentOutput(
-                    intent=intent_val if intent_val in ("chat", "chart", "rule", "dashboard") else "chat",
+                    intent=intent_val if intent_val in ("chat", "chart", "rule", "dashboard", "dtc") else "chat",
                     reason=result.get("reason", ""),
                 )
 
@@ -135,32 +142,65 @@ async def process_chat(
 ) -> dict[str, Any]:
     """处理聊天请求 — 意图识别后分发到子 Agent
 
-    Args:
-        message: 用户消息
-        history: 对话历史 [{role: "user"/"assistant", content: "..."}]
-
-    Returns:
-        {reply, charts, suggestions, rules, execution_time_ms}
+    创建全链路 TraceCollector，覆盖意图识别 → 子 Agent 执行 → 结果返回 的完整路径。
     """
     start = time.time()
 
-    # 1. 意图识别
+    # 创建全链路 TraceCollector（从接口层开始，覆盖意图识别→子Agent→返回）
+    tc = TraceCollector(
+        session_id=session_id or "",
+        request_message=message,
+        agent_name="pivot_agent",
+    )
+    tc.root.input = {
+        "api": "POST /api/chat",
+        "message": message,
+        "session_id": session_id,
+        "history_count": len(history or []),
+        "task_id": task_id,
+        "has_dashboard_draft": dashboard_draft is not None,
+    }
+
+    # 1. 意图识别（独立 span，记录完整输入/输出）
+    intent_span = tc.root.add_child("intent_recognition", "llm", input={"message": message})
     intent, reason = _recognize_intent(message, history)
+    intent_span.finish(output={"intent": intent, "reason": reason})
     logger.info("意图识别: %s (%s)", intent, reason)
 
-    # 2. 分发到子 Agent（传入 session_id 供 trace 采集，传入 intent 供 analyze_node 判断）
+    # 2. 分发到子 Agent（传入 tc 实现全链路追踪）
     if intent == "chart" or intent == "dashboard":
         from agents.chart_agent import process_chart as chart_process
         result = await chart_process(
             message, history, session_id=session_id, intent=intent, dashboard_draft=dashboard_draft,
+            trace_collector=tc, parent_span=tc.root,
         )
     elif intent == "rule":
         from agents.rule_agent import process_rule as rule_process
-        result = await rule_process(message, history, session_id=session_id, task_id=task_id)
+        result = await rule_process(
+            message, history, session_id=session_id, task_id=task_id,
+            trace_collector=tc, parent_span=tc.root,
+        )
+    elif intent == "dtc":
+        from agents.dtc_agent import process_dtc as dtc_process
+        result = await dtc_process(
+            message, history, session_id=session_id,
+            trace_collector=tc, parent_span=tc.root,
+        )
     else:  # chat
         from agents.chat_agent import process_chat as chat_process
-        result = await chat_process(message, history, session_id=session_id)
+        result = await chat_process(
+            message, history, session_id=session_id,
+            trace_collector=tc, parent_span=tc.root,
+        )
 
+    # 3. 完成根 span 并保存完整 trace
     elapsed = (time.time() - start) * 1000
+    tc.root.finish(output={
+        **result,
+        "execution_time_ms": round(elapsed, 2),
+    })
+    tc.save_to_db()
+
     result["execution_time_ms"] = round(elapsed, 2)
+    result["trace_id"] = tc.trace_id
     return result

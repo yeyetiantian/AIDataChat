@@ -95,9 +95,12 @@ def chat_reply_node(state: ChatState) -> ChatState:
         state["reply"] = reply
         state["suggestions"] = []
         if sp:
-            sp.messages = messages
-            sp.tokens = {"input": -1, "output": -1}
-            sp.finish(output={"reply": reply[:500]})
+            sp.messages = list(messages)
+            sp.output = {
+                "reply": reply,
+                "raw_content": raw_resp.content if hasattr(raw_resp, 'content') else str(raw_resp),
+            }
+            sp.finish(output={"reply": reply})
 
 
     except Exception as e:
@@ -122,7 +125,7 @@ def format_reply_node(state: ChatState) -> ChatState:
         if state.get("error"):
             tc.root.finish(error=state["error"])
         else:
-            tc.root.finish(output={"reply": state.get("reply", "")[:200]})
+            tc.root.finish(output={"reply": state.get("reply", "")})
 
     log_path = _save_trace_log(state)
     return state
@@ -151,18 +154,32 @@ def build_chat_agent() -> Any:
     return workflow.compile()
 
 
-async def process_chat(message: str, history: list[dict[str, str]] | None = None, session_id: str | None = None) -> dict[str, Any]:
-    """处理闲聊请求"""
+async def process_chat(message: str, history: list[dict[str, str]] | None = None, session_id: str | None = None,
+                       trace_collector: TraceCollector | None = None, parent_span: SpanNode | None = None) -> dict[str, Any]:
+    """处理闲聊请求
+
+    Args:
+        trace_collector: 来自 pivot_agent 的 TraceCollector
+        parent_span: 父级 Span
+    """
     import uuid
     import time
 
     start = time.time()
 
-    tc = TraceCollector(
-        session_id=session_id or "",
-        request_message=message,
-        agent_name="chat_agent",
-    )
+    if trace_collector and parent_span:
+        tc = trace_collector
+        agent_span = parent_span.add_child(
+            "chat_agent", "agent",
+            input={"message": message},
+        )
+    else:
+        tc = TraceCollector(
+            session_id=session_id or "",
+            request_message=message,
+            agent_name="chat_agent",
+        )
+        agent_span = tc.root
 
     agent = build_chat_agent()
     thread_id = str(uuid.uuid4())
@@ -174,13 +191,16 @@ async def process_chat(message: str, history: list[dict[str, str]] | None = None
         "suggestions": [],
         "error": None,
         "trace_collector": tc,
-        "trace_span": tc.root,
+        "trace_span": agent_span,
     }
 
     config = {"configurable": {"thread_id": thread_id}}
     result = await agent.ainvoke(state, config)
 
-    tc.save_to_db()
+    if trace_collector is None:
+        tc.save_to_db()
+    else:
+        agent_span.finish(output={"reply": result.get("reply", "")})
 
     elapsed = (time.time() - start) * 1000
 
