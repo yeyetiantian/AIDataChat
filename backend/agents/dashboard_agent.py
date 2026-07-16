@@ -83,8 +83,8 @@ _COMPLETENESS_PROMPT = """你是看板需求分析助手。分析用户输入的
 
 判断标准：
 1. 如果用户已通过问卷提交了结构化的看板草案（包含任务ID、图表数量、各图表描述）→ is_complete=true
-2. 如果用户消息明确说明了要多少个图表、每个图表展示什么 → 提取为 chart_infos 列表，is_complete=true
-3. 如果用户只说了"帮我创建一个看板"或非常模糊的需求 → is_complete=false，列出 missing_info
+2. 如果用户消息明确说明了要多少个图表、每个图表展示什么，或是对已有看板进行修改/补充 → 提取为 chart_infos 列表，is_complete=true
+3. 如果用户只说了"帮我创建一个看板"或非常模糊的需求，且不是对已有看板的修改 → is_complete=false，列出 missing_info
 
 chart_infos 格式：每项是一个图表的需求描述文本，如"生成饼图，分析规则产生报警的数量占比"。
 如果信息不完善，missing_info 列出缺失的关键项。"""
@@ -148,14 +148,15 @@ def _extract_chart_infos_from_draft(draft: dict) -> list[str]:
 # ============================================================
 
 def check_completeness_node(state: DashboardState) -> DashboardState:
-    """Step 1: 用 LLM 分析信息是否完善，不完善则返回问卷"""
+    """Step 1: 分析信息是否完善，仅非常模糊的创建需求才返回问卷"""
     tc: TraceCollector | None = state.get("trace_collector")
     parent_span: SpanNode | None = state.get("trace_span")
     sp: SpanNode | None = parent_span.add_child("check_completeness", "llm", input={"message": state["user_message"]}) if (tc and parent_span) else None
 
     _draft = state.get("dashboard_draft")
+    _user_msg = state["user_message"]
 
-    # 有结构化的看板草案 → 直接提取 chart_infos
+    # ---- 快速路径 1: 有结构化的看板草案 → 直接提取 chart_infos ----
     if _draft:
         chart_infos = _extract_chart_infos_from_draft(_draft)
         if chart_infos:
@@ -166,14 +167,55 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
                 sp.finish(output={"complete": True, "chart_count": len(chart_infos), "source": "draft"})
             return state
 
-    # 无 draft → 用 LLM 分析用户消息是否足够
+    # ---- 快速路径 2: 仅有模糊的创建意图时才需要问卷 ----
+    # 以下情况视为"具体需求"，不需要问卷:
+    #   - 包含修改/调整词汇
+    #   - 包含具体图表类型/维度关键词
+    #   - 包含分析维度指标
+
+    _modification_kws = ["改成", "改为", "修改", "调整", "换为", "换成", "加一个", "新增", "添加", "补充"]
+    _specific_chart_kws = [
+        "柱状", "折线", "饼图", "雷达", "面积", "散点", "趋势", "分布", "对比", "排名",
+        "各", "按", "次数", "数量", "占比", "排行", "信号", "报警",
+    ]
+
+    has_modification = any(kw in _user_msg for kw in _modification_kws)
+    has_specific_chart = any(kw in _user_msg for kw in _specific_chart_kws)
+    has_chart_ref = any(kw in _user_msg for kw in ["图表", "图"])  # 提到图表
+
+    # 判断是否为纯粹的模糊创建看板请求
+    is_vague_dashboard_creation = (
+        not has_modification
+        and not has_specific_chart
+        and not has_chart_ref
+        and any(kw in _user_msg for kw in ["创建看板", "新建看板", "做一个看板", "生成看板", "数据大屏", "新建一个看板"])
+    ) or (
+        not has_modification
+        and not has_specific_chart
+        and not has_chart_ref
+        and "看板" in _user_msg
+        and len(_user_msg) < 15  # 极短的看板请求
+    )
+
+    if is_vague_dashboard_creation:
+        logger.info("check_completeness: 模糊创建看板请求，返回问卷")
+        state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
+        state["ask_questions"] = _build_dashboard_questionnaire()
+        state["pending_step"] = "awaiting_questions"
+        state["chart_infos"] = []
+        if sp:
+            sp.finish(output={"complete": False, "reason": "模糊看板创建需求"})
+        return state
+
+    # ---- 非模糊需求：用 LLM 提取结构化的图表信息 -----
+    # 包括：具体修改、补充图表、有特定维度的分析等
     try:
         system_prompt = _COMPLETENESS_PROMPT
         messages = [{"role": "system", "content": system_prompt}]
         history = [h for h in (state.get("conversation_history") or []) if h.get("role") != "system"]
         for h in history:
             messages.append(h)
-        messages.append({"role": "user", "content": state["user_message"]})
+        messages.append({"role": "user", "content": _user_msg})
 
         if sp:
             sp.messages = list(messages)
@@ -190,7 +232,7 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
             }]
             for h in history:
                 fallback_messages.append(h)
-            fallback_messages.append({"role": "user", "content": state["user_message"]})
+            fallback_messages.append({"role": "user", "content": _user_msg})
             raw = get_llm().invoke(fallback_messages)
             raw_content = raw.content.strip() if hasattr(raw, 'content') else str(raw)
             try:
@@ -208,25 +250,28 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
             sp.output = completeness.model_dump()
             sp.finish(output=completeness.model_dump())
 
+        # 只要 LLM 认为完善或有 chart_infos 就继续
         if completeness.is_complete and completeness.chart_infos:
             logger.info("check_completeness: LLM 分析认为完善，提取 %d 个图表", len(completeness.chart_infos))
             state["chart_infos"] = completeness.chart_infos
             state["reply"] = completeness.reply or "好的，已解析您的需求，正在生成图表配置..."
         else:
-            logger.info("check_completeness: 信息不完善：%s", completeness.reason)
-            state["reply"] = completeness.reply or "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
-            state["ask_questions"] = _build_dashboard_questionnaire()
-            state["pending_step"] = "awaiting_questions"
-            state["chart_infos"] = []
+            # LLM 认为不完善→ 检查是否有具体关键词（兜底）
+            if has_specific_chart or has_chart_ref or has_modification:
+                logger.info("check_completeness: 虽有具体关键词但 LLM 判不完善，直接使用用户消息作为 chart_info")
+                state["chart_infos"] = [state["user_message"]]
+                state["reply"] = "好的，正在生成图表配置..."
+            else:
+                logger.info("check_completeness: 信息不完善：%s", completeness.reason)
+                state["reply"] = completeness.reply or "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
+                state["ask_questions"] = _build_dashboard_questionnaire()
+                state["pending_step"] = "awaiting_questions"
+                state["chart_infos"] = []
 
     except Exception as e:
         logger.error("check_completeness 失败: %s", e, exc_info=True)
         # 降级：用关键词检查
-        _has_specific = any(kw in state["user_message"] for kw in [
-            "图表", "图", "柱状", "折线", "饼图", "雷达", "面积", "散点",
-            "次数", "数量", "占比", "排行", "趋势", "对比",
-        ])
-        if _has_specific:
+        if has_specific_chart or has_chart_ref or has_modification:
             state["chart_infos"] = [state["user_message"]]
             state["reply"] = "好的，正在生成图表配置..."
         else:

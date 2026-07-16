@@ -250,7 +250,7 @@ const randomSingle = (templateStr: string): string => {
   const getNum = () => {
     if (templateStr.includes('雷达图')) return 5
     if (templateStr.includes('散点图')) return 1
-    if (templateStr.includes('区域图')) return 5
+    if (templateStr.includes('面积图')) return 5
     if (templateStr.includes('折线图')) return 6
     return 0
   }
