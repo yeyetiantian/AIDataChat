@@ -42,7 +42,9 @@ async def lifespan(app: FastAPI):
     logger.info("环境: %s", os.getenv("ENV", "development"))
     logger.info("=" * 60)
     yield
-    logger.info("应用关闭")
+    logger.info("应用关闭，关闭数据库连接...")
+    from core.chat_db import close_conn
+    close_conn()
 
 
 app = FastAPI(

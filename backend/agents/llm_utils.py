@@ -278,32 +278,27 @@ class TraceCollector:
         )
 
     def save_to_db(self):
-        """保存完整 trace 到数据库"""
-        from core.chat_db import create_trace_span, update_trace_status
-
-        root_json = self.root.to_json()
+        """保存完整 trace 到本地 JSON 文件 (agent_logs/trace_{trace_id}.json)"""
+        root_dict = self.root.to_dict()
         status = "error" if self.root.status == "error" else "success"
 
-        try:
-            existing = None
-            try:
-                from core.chat_db import get_trace_detail
-                existing = get_trace_detail(self.trace_id)
-            except Exception:
-                pass
+        log_entry = {
+            "id": self.trace_id,
+            "session_id": self.session_id or "",
+            "request_message": self.request_message,
+            "agent_name": self.agent_name,
+            "status": status,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "root_span": root_dict,
+        }
 
-            if existing:
-                update_trace_status(self.trace_id, status, root_json)
-            else:
-                create_trace_span(
-                    trace_id=self.trace_id,
-                    session_id=self.session_id or "",
-                    request_message=self.request_message,
-                    agent_name=self.agent_name,
-                )
-                update_trace_status(self.trace_id, status, root_json)
+        log_path = os.path.join(_get_log_dir(), f"trace_{self.trace_id}.json")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(log_entry, f, ensure_ascii=False, indent=2, default=str)
         except Exception as e:
-            logger.warning("保存 trace 到数据库失败: %s", e)
+            logger.warning("保存 trace 到本地文件失败: %s", e)
 
 
 def save_trace_log(

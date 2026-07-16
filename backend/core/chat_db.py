@@ -33,11 +33,23 @@ def _get_conn() -> sqlite3.Connection:
     """获取线程本地连接"""
     if not hasattr(_local, "conn") or _local.conn is None:
         os.makedirs(DATA_DIR, exist_ok=True)
-        _local.conn = sqlite3.connect(DB_PATH)
+        _local.conn = sqlite3.connect(DB_PATH, timeout=30)
         _local.conn.row_factory = sqlite3.Row
-        _local.conn.execute("PRAGMA journal_mode=DELETE")
+        _local.conn.execute("PRAGMA journal_mode=WAL")
+        _local.conn.execute("PRAGMA busy_timeout=30000")
         _local.conn.execute("PRAGMA foreign_keys=ON")
     return _local.conn
+
+
+def close_conn():
+    """关闭当前线程的数据库连接（应用关闭时调用）"""
+    if hasattr(_local, "conn") and _local.conn is not None:
+        try:
+            _local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _local.conn.close()
+        except Exception:
+            pass
+        _local.conn = None
 
 
 def init_db():
@@ -137,26 +149,6 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_agent_drafts_session ON agent_drafts(session_id, status);
     """)
     conn.commit()
-    # Agent Trace 监控表（幂等创建）
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS trace_spans (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            request_message TEXT NOT NULL,
-            agent_name TEXT NOT NULL DEFAULT 'chart_agent',
-            status TEXT NOT NULL DEFAULT 'in_progress',
-            root_span_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT DEFAULT (datetime('now','localtime')),
-            updated_at TEXT DEFAULT (datetime('now','localtime'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_trace_session ON trace_spans(session_id);
-        CREATE INDEX IF NOT EXISTS idx_trace_created ON trace_spans(created_at);
-    """)
-    # 幂等迁移：给 trace_spans 加 request_message 列（如果不存在）
-    try:
-        conn.execute("ALTER TABLE trace_spans ADD COLUMN request_message TEXT NOT NULL DEFAULT ''")
-    except Exception:
-        pass
     # 幂等迁移：给 chat_messages 加 ask_questions_json / pending_step 列
     try:
         conn.execute("ALTER TABLE chat_messages ADD COLUMN ask_questions_json TEXT")
@@ -702,98 +694,97 @@ def init_default_user() -> dict:
     return get_or_create_user("default_user")
 
 
-# ====== Agent Trace 监控 ======
+# ====== Agent Trace 监控（基于本地 JSON 文件） ======
 
-def create_trace_span(
-    trace_id: str,
-    session_id: str,
-    request_message: str,
-    agent_name: str = "chart_agent",
-) -> dict:
-    """创建一条新的 Agent trace 记录"""
-    conn = _get_conn()
-    conn.execute(
-        "INSERT INTO trace_spans (id, session_id, request_message, agent_name, status, root_span_json) "
-        "VALUES (?, ?, ?, ?, 'in_progress', '{}')",
-        (trace_id, session_id, request_message, agent_name),
-    )
-    conn.commit()
-    return {
-        "id": trace_id,
-        "session_id": session_id,
-        "request_message": request_message,
-        "agent_name": agent_name,
-        "status": "in_progress",
-        "root_span_json": "{}",
-    }
+import glob as _glob
+
+def _get_trace_dir() -> str:
+    """获取 trace 日志目录"""
+    import sys
+    if getattr(sys, "frozen", False):
+        _backend_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(_backend_dir, "agent_logs")
 
 
-def update_trace_status(
-    trace_id: str,
-    status: str,
-    root_span_json: str,
-) -> bool:
-    """更新 trace 状态和完整 span 树"""
-    logger.debug("update_trace_status: id=%s status=%s root_json_len=%s", trace_id, status, len(root_span_json))
-    conn = _get_conn()
-    cur = conn.execute(
-        "UPDATE trace_spans SET status = ?, root_span_json = ?, updated_at = datetime('now','localtime') WHERE id = ?",
-        (status, root_span_json, trace_id),
-    )
-    conn.commit()
-    affected = cur.rowcount > 0
-    logger.debug("update_trace_status: affected=%s", affected)
-    return affected
+def _read_trace_file(trace_id: str) -> dict | None:
+    """读取单个 trace JSON 文件"""
+    trace_path = os.path.join(_get_trace_dir(), f"trace_{trace_id}.json")
+    if not os.path.isfile(trace_path):
+        return None
+    try:
+        with open(trace_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _scan_trace_files() -> list[dict]:
+    """扫描 agent_logs/ 下所有 trace_*.json 文件，按创建时间倒序"""
+    trace_dir = _get_trace_dir()
+    os.makedirs(trace_dir, exist_ok=True)
+    pattern = os.path.join(trace_dir, "trace_*.json")
+    files = _glob.glob(pattern)
+    traces = []
+    for fp in files:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("id"):
+                traces.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    # 按 created_at 倒序
+    traces.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    return traces
 
 
 def list_trace_summaries(limit: int = 50, offset: int = 0, session_id: str | None = None) -> list[dict]:
-    """列出 trace 摘要列表（不含 root_span_json）"""
-    conn = _get_conn()
+    """列出 trace 摘要列表（不含 root_span）"""
+    all_traces = _scan_trace_files()
     if session_id:
-        cur = conn.execute(
-            "SELECT id, session_id, request_message, agent_name, status, created_at, updated_at "
-            "FROM trace_spans WHERE session_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (session_id, limit, offset),
-        )
-    else:
-        cur = conn.execute(
-            "SELECT id, session_id, request_message, agent_name, status, created_at, updated_at "
-            "FROM trace_spans ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        )
-    return [dict(r) for r in cur.fetchall()]
+        all_traces = [t for t in all_traces if t.get("session_id") == session_id]
+    # 摘要：只返回元信息，不返回 root_span
+    summaries = []
+    for t in all_traces[offset:offset + limit]:
+        summaries.append({
+            "id": t.get("id", ""),
+            "session_id": t.get("session_id", ""),
+            "request_message": t.get("request_message", ""),
+            "agent_name": t.get("agent_name", ""),
+            "status": t.get("status", ""),
+            "created_at": t.get("created_at", ""),
+            "updated_at": t.get("updated_at", ""),
+        })
+    return summaries
 
 
 def get_trace_detail(trace_id: str) -> dict | None:
-    """获取完整 trace 详情（含 root_span_json）"""
-    conn = _get_conn()
-    cur = conn.execute("SELECT * FROM trace_spans WHERE id = ?", (trace_id,))
-    row = cur.fetchone()
-    return dict(row) if row else None
+    """获取完整 trace 详情（含 root_span）"""
+    return _read_trace_file(trace_id)
 
 
 def list_session_ids_for_traces(limit: int = 100) -> list[dict]:
     """获取所有有 trace 记录的会话 ID 列表"""
-    conn = _get_conn()
-    cur = conn.execute(
-        "SELECT DISTINCT session_id, MAX(created_at) as last_trace "
-        "FROM trace_spans GROUP BY session_id ORDER BY last_trace DESC LIMIT ?",
-        (limit,),
-    )
-    return [dict(r) for r in cur.fetchall()]
+    all_traces = _scan_trace_files()
+    seen: dict[str, str] = {}
+    for t in all_traces:
+        sid = t.get("session_id", "")
+        if sid and sid not in seen:
+            seen[sid] = t.get("created_at", "")
+    # 按最新 trace 时间倒序
+    sorted_sessions = sorted(seen.items(), key=lambda x: x[1], reverse=True)
+    return [{"session_id": sid, "last_trace": ts} for sid, ts in sorted_sessions[:limit]]
 
 
 def get_trace_stats() -> dict:
     """获取 trace 统计信息"""
-    conn = _get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM trace_spans").fetchone()[0]
-    success = conn.execute("SELECT COUNT(*) FROM trace_spans WHERE status = 'success'").fetchone()[0]
-    error = conn.execute("SELECT COUNT(*) FROM trace_spans WHERE status = 'error'").fetchone()[0]
-    return {
-        "total": total,
-        "success": success,
-        "error": error,
-    }
+    all_traces = _scan_trace_files()
+    total = len(all_traces)
+    success = sum(1 for t in all_traces if t.get("status") == "success")
+    error = sum(1 for t in all_traces if t.get("status") == "error")
+    return {"total": total, "success": success, "error": error}
 
 
 # ============================================================
