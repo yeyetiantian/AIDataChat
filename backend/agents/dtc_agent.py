@@ -66,11 +66,9 @@ def _get_table_schema() -> str:
         return _TABLE_SCHEMA
 
     try:
-        import sqlite3
-        import sys
-        _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(_backend_dir, "ai_data.db")
-        conn = sqlite3.connect(db_path)
+        # 复用 chat_db 的共享连接（避免多连接锁冲突）
+        from core.chat_db import _get_conn
+        conn = _get_conn()
         cursor = conn.cursor()
 
         lines = [
@@ -139,12 +137,12 @@ def _get_table_schema() -> str:
                 lines.append(f"  {', '.join(truncated)}")
             lines.append("")
 
-        conn.close()
         _TABLE_SCHEMA = "\n".join(lines)
         logger.info("DTC 表结构已构建: %d chars", len(_TABLE_SCHEMA))
     except Exception as e:
         logger.warning("读取 DTC 表结构失败: %s", e)
-        _TABLE_SCHEMA = "无法读取表结构信息。"
+        # 错误不缓存，下次重试
+        return "无法读取表结构信息。"
 
     return _TABLE_SCHEMA
 
@@ -316,44 +314,27 @@ def execute_dtc_node(state: DtcState) -> DtcState:
             return state
 
     try:
-        import sqlite3
-        import sys
-        if getattr(sys, "frozen", False):
-            _backend_dir = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(_backend_dir, "ai_data.db")
-
-        conn = sqlite3.connect(db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            cursor = conn.execute(sql)
-            rows = [dict(row) for row in cursor.fetchall()]
-            columns = [desc[0] for desc in cursor.description]
-            state["query_result"] = {
-                "success": True,
-                "columns": columns,
-                "rows": rows,
+        # 复用 chat_db 的共享连接（避免多连接 I/O 冲突）
+        from core.chat_db import _get_conn
+        conn = _get_conn()
+        cursor = conn.execute(sql)
+        rows = [dict(row) for row in cursor.fetchall()]
+        columns = [desc[0] for desc in cursor.description]
+        state["query_result"] = {
+            "success": True,
+            "columns": columns,
+            "rows": rows,
+            "total": len(rows),
+        }
+        if sp:
+            sp.finish(output={
                 "total": len(rows),
-            }
-            if sp:
-                sp.finish(output={
-                    "total": len(rows),
-                    "columns": columns,
-                })
-        except sqlite3.Error as e:
-            error_msg = f"查询参数有误，请调整后重试。{e}"
-            logger.error("DTC 查询执行失败: %s", error_msg)
-            state["error"] = error_msg
-            state["query_result"] = None
-            if sp:
-                sp.finish(error=error_msg)
-        finally:
-            conn.close()
+                "columns": columns,
+            })
 
     except Exception as exc:
-        error_msg = f"DTC 查询异常，请稍后重试。{exc}"
-        logger.error("DTC 查询执行失败: %s", exc)
+        error_msg = f"查询参数有误，请调整后重试。{exc}"
+        logger.error("DTC 查询执行失败: %s", error_msg)
         state["error"] = error_msg
         state["query_result"] = None
         if sp:

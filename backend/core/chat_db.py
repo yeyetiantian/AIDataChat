@@ -736,22 +736,41 @@ def _read_trace_file(trace_id: str) -> dict | None:
 
 
 def _scan_trace_files() -> list[dict]:
-    """扫描 agent_logs/ 下所有 trace_*.json 文件，按创建时间倒序"""
+    """扫描 agent_logs/ 下所有 trace JSON 文件，按创建时间倒序"""
     trace_dir = _get_trace_dir()
     os.makedirs(trace_dir, exist_ok=True)
-    pattern = os.path.join(trace_dir, "trace_*.json")
-    files = _glob.glob(pattern)
+
+    # 匹配两种格式：trace_{id}.json 和 {agent}_{timestamp}.json
+    pattern_new = os.path.join(trace_dir, "trace_*.json")
+    files = _glob.glob(pattern_new)
+
+    # 也扫描旧格式（agent_name_timestamp.json）
+    for f in _glob.glob(os.path.join(trace_dir, "*.json")):
+        basename = os.path.basename(f)
+        if not basename.startswith("trace_"):
+            files.append(f)
+
     traces = []
     for fp in files:
         try:
             with open(fp, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            # 统一格式：确保有 id 和 session_id
             if data.get("id"):
+                # 兼容旧格式（save_trace_log 输出）
+                if "root_span" not in data and "trace" in data:
+                    data["root_span"] = data.get("trace", {})
+                if "request_message" not in data and "user_message" in data:
+                    data["request_message"] = data["user_message"]
+                if "status" not in data:
+                    error = data.get("error")
+                    data["status"] = "error" if error else "success"
                 traces.append(data)
         except (json.JSONDecodeError, OSError):
             continue
-    # 按 created_at 倒序
-    traces.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+
+    # 按 updated_at / created_at 倒序
+    traces.sort(key=lambda t: t.get("updated_at") or t.get("created_at", ""), reverse=True)
     return traces
 
 
@@ -777,7 +796,16 @@ def list_trace_summaries(limit: int = 50, offset: int = 0, session_id: str | Non
 
 def get_trace_detail(trace_id: str) -> dict | None:
     """获取完整 trace 详情（含 root_span）"""
-    return _read_trace_file(trace_id)
+    # 先查新格式 trace_{id}.json
+    result = _read_trace_file(trace_id)
+    if result:
+        return result
+
+    # 再查旧格式 {agent}_{session_id}.json（通过扫描全量匹配 id）
+    for t in _scan_trace_files():
+        if t.get("id") == trace_id:
+            return t
+    return None
 
 
 def list_session_ids_for_traces(limit: int = 100) -> list[dict]:

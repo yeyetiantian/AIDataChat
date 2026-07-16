@@ -47,22 +47,22 @@ async def get_trace(trace_id: str):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Trace not found")
 
-    # 解析 root_span_json
-    root_span = {}
-    if trace.get("root_span_json"):
+    # 解析 root_span —— 兼容新格式（root_span dict）和旧格式（root_span_json 字符串）
+    root_span = trace.get("root_span") or {}
+    if not root_span and trace.get("root_span_json"):
         try:
             root_span = json.loads(trace["root_span_json"])
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             root_span = {"error": "invalid root_span_json"}
 
     return {
-        "id": trace["id"],
-        "session_id": trace["session_id"],
-        "request_message": trace["request_message"],
-        "agent_name": trace["agent_name"],
-        "status": trace["status"],
-        "created_at": trace["created_at"],
-        "updated_at": trace["updated_at"],
+        "id": trace.get("id", trace.get("trace_id", "")),
+        "session_id": trace.get("session_id", ""),
+        "request_message": trace.get("request_message", trace.get("user_message", "")),
+        "agent_name": trace.get("agent_name", trace.get("agent", "")),
+        "status": trace.get("status", ""),
+        "created_at": trace.get("created_at", ""),
+        "updated_at": trace.get("updated_at", ""),
         "root_span": root_span,
     }
 
