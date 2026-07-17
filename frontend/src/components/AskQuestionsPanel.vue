@@ -13,20 +13,43 @@
     <!-- 任务选择 -->
     <div class="ask-item">
       <div class="ask-label">关联哪个任务？（任务变更会随机重置信号[]中的信号）</div>
-      <el-select
-        v-model="taskId"
-        filterable
-        remote
-        :loading="taskLoading"
-        :remote-method="onTaskSearch"
-        placeholder="搜索任务..."
-        clearable
-        style="width:100%"
-        @change="onTaskChange"
-      >
-        <el-option v-for="t in taskOptions" :key="t.value" :label="t.label" :value="t.value" />
-      </el-select>
+      <div class="task-select-trigger" @click="taskDialogVisible = true">
+        <span v-if="selectedTaskLabel" class="task-selected">{{ selectedTaskLabel }}</span>
+        <span v-else class="task-placeholder">点击选择任务...</span>
+      </div>
     </div>
+
+    <!-- 任务选择弹窗 -->
+    <el-dialog
+      v-model="taskDialogVisible"
+      title="选择任务"
+      width="420px"
+      top="10vh"
+      :close-on-click-modal="true"
+    >
+      <el-input
+        v-model="taskSearchKeyword"
+        placeholder="搜索任务名称或ID..."
+        clearable
+        size="small"
+        @input="onTaskSearchInput"
+      />
+      <div class="task-list" v-loading="taskLoading">
+        <div
+          v-for="t in taskOptions"
+          :key="t.value"
+          class="task-list-item"
+          :class="{ active: taskId === t.value }"
+          @click="selectTask(t)"
+        >
+          <span class="task-list-name">{{ t.name }}</span>
+          <span class="task-list-id">#{{ t.value }}</span>
+        </div>
+        <div v-if="!taskLoading && taskOptions.length === 0" class="task-list-empty">
+          暂无匹配任务
+        </div>
+      </div>
+    </el-dialog>
 
     <!-- 可用规则 + 信号（紧凑标签，可拖拽） -->
     <template v-if="taskId">
@@ -39,8 +62,10 @@
             v-for="r in ruleOptions"
             :key="r.value"
             class="ref-tag ref-tag-rule"
+            :class="{ selected: selectedRules.includes(r.value) }"
             draggable="true"
             @dragstart="onDragStart($event, 'rule', r)"
+            @click="onRuleClick(r)"
           >
             {{ r.label }}
           </span>
@@ -50,14 +75,16 @@
       <div class="ref-section">
         <div class="ref-header">可用信号</div>
         <div v-if="signalLoading" class="ref-loading">加载中...</div>
-        <div v-else-if="signalOptions.length === 0" class="ref-empty">暂无信号</div>
+        <div v-else-if="filteredSignals.length === 0" class="ref-empty">暂无信号</div>
         <div v-else class="ref-tags">
           <span
-            v-for="s in signalOptions"
+            v-for="s in filteredSignals"
             :key="s.value"
             class="ref-tag ref-tag-signal"
+            :class="{ selected: selectedSignals.includes(s.value) }"
             draggable="true"
             @dragstart="onDragStart($event, 'signal', s)"
+            @click="onSignalClick(s)"
           >
             {{ s.label }}
           </span>
@@ -75,6 +102,7 @@
         end-placeholder="结束日期"
         value-format="YYYY-MM-DD HH:mm:ss"
         style="width:100%"
+        :disabled-date="disabledDate"
       />
     </div>
       
@@ -138,6 +166,12 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
+interface RawSignalItem {
+  label: string
+  value: string
+  rule_ids?: number[]
+}
+
 const DEFAULT_SLOT_MAP = [
   '生成饼图，分析规则产生报警的数量占比',
   '生成柱状图，统计每日报警数量，X轴日期，Y轴报警时间计数，用规则做图例',
@@ -151,11 +185,27 @@ const DEFAULT_SLOT_MAP = [
 const chartCount = ref(6)
 const dateRange = ref<[String | null, String | null] | null>(['2025-08-29 00:00:00', '2025-09-04 23:59:59'])
 
+/** 限制日期选择范围为 2025-05-29 ~ 2026-07-01 */
+const disabledDate = (time: Date) => {
+  const min = new Date('2025-05-29 00:00:00').getTime()
+  const max = new Date('2026-07-01 23:59:59').getTime()
+  return time.getTime() < min || time.getTime() > max
+}
+
 // Task
 const taskId = ref('')
 const taskOptions = ref<OptionItem[]>([])
 const taskLoading = ref(false)
+const taskDialogVisible = ref(false)
+const taskSearchKeyword = ref('')
 let taskSearchTimer: any = null
+
+/** 已选任务的显示标签 */
+const selectedTaskLabel = computed(() => {
+  if (!taskId.value) return ''
+  const t = taskOptions.value.find(o => o.value === taskId.value)
+  return t ? t.label : ''
+})
 
 async function loadTasks(keyword: string = '') {
   taskLoading.value = true
@@ -166,7 +216,7 @@ async function loadTasks(keyword: string = '') {
       const data = await r.json()
       taskOptions.value = data.map((t: any) => ({
         label: `${t.TASK_NAME}(${t.TASK_ID})`,
-        name: t.TASK_NAME,  
+        name: t.TASK_NAME,
         value: String(t.TASK_ID),
       }))
     }
@@ -174,14 +224,23 @@ async function loadTasks(keyword: string = '') {
   taskLoading.value = false
 }
 
-function onTaskSearch(query: string) {
+function onTaskSearchInput() {
   clearTimeout(taskSearchTimer)
-  taskSearchTimer = setTimeout(() => loadTasks(query), 300)
+  taskSearchTimer = setTimeout(() => loadTasks(taskSearchKeyword.value), 300)
+}
+
+function selectTask(task: OptionItem) {
+  if (task.value !== taskId.value) {
+    taskId.value = task.value
+    onTaskChange()
+  }
+  taskDialogVisible.value = false
 }
 
 // Rules
 const ruleOptions = ref<OptionItem[]>([])
 const ruleLoading = ref(false)
+const selectedRules = ref<string[]>([])
 
 async function loadRules() {
   if (!taskId.value) return
@@ -199,9 +258,41 @@ async function loadRules() {
   ruleLoading.value = false
 }
 
+/** 点击规则切换选中态，选中后信号列表按该规则筛选 */
+function onRuleClick(rule: OptionItem) {
+  const idx = selectedRules.value.indexOf(rule.value)
+  if (idx >= 0) {
+    selectedRules.value.splice(idx, 1)
+  } else {
+    selectedRules.value.push(rule.value)
+  }
+  selectedRules.value = [...selectedRules.value] // trigger reactivity
+}
+
 // Signals
-const signalOptions = ref<OptionItem[]>([])
+const signalOptions = ref<RawSignalItem[]>([])
 const signalLoading = ref(false)
+const selectedSignals = ref<string[]>([])
+
+/** 根据选中规则过滤后的信号列表 */
+const filteredSignals = computed(() => {
+  if (selectedRules.value.length === 0) return signalOptions.value
+  return signalOptions.value.filter(s => {
+    if (!s.rule_ids || s.rule_ids.length === 0) return true
+    return selectedRules.value.some(rid => s.rule_ids!.includes(Number(rid)))
+  })
+})
+
+/** 点击信号切换选中态 */
+function onSignalClick(signal: RawSignalItem) {
+  const idx = selectedSignals.value.indexOf(signal.value)
+  if (idx >= 0) {
+    selectedSignals.value.splice(idx, 1)
+  } else {
+    selectedSignals.value.push(signal.value)
+  }
+  selectedSignals.value = [...selectedSignals.value] // trigger reactivity
+}
 
 async function loadSignals() {
   if (!taskId.value) return
@@ -213,12 +304,8 @@ async function loadSignals() {
       signalOptions.value = data.map((s: any) => ({
         label: `${s.signal_name}`,
         value: s.signal_name,
-      }))
-      chartSlots.value.forEach((x) => {
-        if (x.dimension){ 
-          x.dimension = randomSingle(x.dimension)
-        }
-      })
+        rule_ids: s.rule_ids,
+      })).filter(x => !(x.value?.includes('(') || x.value?.includes(')')))
     }
   } catch {}
   signalLoading.value = false
@@ -226,6 +313,8 @@ async function loadSignals() {
 
 function onTaskChange() {
   const tid = taskId.value
+  selectedRules.value = []
+  selectedSignals.value = []
   if (tid) {
     loadRules()
     loadSignals()
@@ -235,8 +324,8 @@ function onTaskChange() {
   }
 }
 const randomSingle = (templateStr: string): string => {
-  if (signalOptions.value.length < 1) return templateStr
-  const allLabels = signalOptions.value.map(item => item.label);
+  if (filteredSignals.value.length < 1) return templateStr
+  const allLabels = filteredSignals.value.map(item => item.label);
   const getRandomLabels = (n: number) => {
     const copy = [...allLabels];
     const takeNum = Math.min(n, copy.length);
@@ -260,6 +349,16 @@ const randomSingle = (templateStr: string): string => {
     return `${prefix}[${getRandomLabels(num)}]`
   })
 }
+
+const setChartText = () => {
+  chartSlots.value.forEach((x) => {
+    if (x.dimension){ 
+      x.dimension = randomSingle(x.dimension)
+    }
+  })
+}
+
+watch(() => filteredSignals.value.length, () => setChartText())
 
 // Chart slots
 const chartSlots = ref<ChartSlot[]>([])
@@ -335,6 +434,7 @@ function formattedMsgFn() {
   const taskOpt = taskOptions.value?.find((o: any) => String(o.value) === String(taskId.value))
   const taskLabel = taskOpt?.name
   const dateLabel = dateRange.value?.join(' 到 ')
+  const ruleLabel = selectedRules.value.join('、')
 
   const lines: string[] = ['📊 看板需求确认']
   lines.push(`图表数量：**${chartCount.value}**`)
@@ -416,16 +516,28 @@ function submitAnswers() {
   transition: transform .1s;
 }
 .ref-tag:active { cursor: grabbing; transform: scale(.95); }
-.ref-tag.selected { box-shadow: 0 0 0 2px #2563eb inset; font-weight: 600; }
 .ref-tag-rule {
   background: #e0f2fe;
   color: #0369a1;
   border: 1px solid #bae6fd;
+  cursor: pointer;
+}
+.ref-tag-rule.selected {
+  color: #2563eb;
+  background: #8fd2ff;
+  font-weight: 600;
 }
 .ref-tag-signal {
   background: #fae8ff;
   color: #a21caf;
   border: 1px solid #f5d0fe;
+  cursor: pointer;
+}
+.ref-tag-signal.selected {
+  color: #7c1d8e;
+  background: #e9d5ff;
+  font-weight: 600;
+  border-color: #a21caf;
 }
 
 /* Chart slot */
@@ -469,6 +581,77 @@ function submitAnswers() {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid #e5e7eb;
+}
+
+/* Task select trigger */
+.task-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color .15s;
+  min-height: 28px;
+}
+.task-select-trigger:hover {
+  border-color: #6366f1;
+}
+.task-selected {
+  color: #374151;
+  font-weight: 500;
+}
+.task-placeholder {
+  color: #9ca3af;
+}
+.task-select-trigger::after {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #9ca3af;
+  flex-shrink: 0;
+}
+
+/* Task dialog list */
+.task-list {
+  margin-top: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.task-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.task-list-item:hover {
+  background: #eef2ff;
+}
+.task-list-item.active {
+  background: #e0e7ff;
+  font-weight: 600;
+}
+.task-list-name {
+  font-size: 13px;
+  color: #374151;
+}
+.task-list-id {
+  font-size: 11px;
+  color: #9ca3af;
+}
+.task-list-empty {
+  text-align: center;
+  color: #9ca3af;
+  padding: 20px 0;
+  font-size: 12px;
 }
 
 .chart-tabs { margin-bottom: 4px; }
