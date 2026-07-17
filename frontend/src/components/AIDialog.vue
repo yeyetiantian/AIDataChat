@@ -111,7 +111,7 @@
                 </div>
                 <div class="chart-card-body">
                   <div v-if="ch.error" class="chart-err">{{ ch.error }}</div>
-                  <VegaLiteRenderer v-else :ref="el=>setRR(`c_${i}_${ci}`,el)" :data="ch.data" :config="ch.pivot_config" :chart-type="ch.chart_type" :hide-toolbar="true" :hide-title="true" />
+                  <EChartsRenderer v-else :ref="el=>setRR(`c_${i}_${ci}`,el)" :data="ch.data" :config="ch.pivot_config" :chart-type="ch.chart_type" :hide-toolbar="true" :hide-title="true" />
                 </div>
               </div>
               <div class="msg-charts-footer" v-if="msg.charts.length > 1">
@@ -180,6 +180,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useChartStore, MAX_BOARD_CHARTS } from '@/stores/useChartStore'
 import { useBoardStore } from '@/stores/useBoardStore'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
+import EChartsRenderer from './EChartsRenderer.vue'
 import AskQuestionsPanel from './AskQuestionsPanel.vue'
 import ChartDataDialog from './ChartDataDialog.vue'
 import ChartSqlDialog from './ChartSqlDialog.vue'

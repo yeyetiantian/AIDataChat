@@ -51,7 +51,7 @@
             <strong>空白看板</strong>
             <span>双击卡片打开右侧透视表配置</span>
           </div>
-          <VegaLiteRenderer
+          <EChartsRenderer
             v-else
             :ref="(el) => setRendererRef(chart.id, el)"
             :spec="chart.vega_spec"
@@ -87,6 +87,7 @@ import { Delete, FullScreen, Grid, Picture } from '@element-plus/icons-vue'
 import { MAX_BOARD_CHARTS, useChartStore, type SavedChart } from '@/stores/useChartStore'
 import { buildBoardSlots } from '@/utils/boardSlots'
 import VegaLiteRenderer from './VegaLiteRenderer.vue'
+import EChartsRenderer from './EChartsRenderer.vue'
 
 const store = useChartStore()
 
