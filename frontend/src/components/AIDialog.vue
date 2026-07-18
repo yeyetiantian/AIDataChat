@@ -88,8 +88,8 @@
           </div>
           <div class="msg-bubble">
             <div class="msg-text">{{ msg.content }}</div>
-            <!-- 交互式问卷 -->
-            <div v-if="msg.ask_questions?.length && msg.role === 'assistant'" class="msg-questions">
+            <!-- 交互式问卷（仅当消息是最后一条时显示，防止刷新后重复出现） -->
+            <div v-if="msg.ask_questions?.length && msg.role === 'assistant' && i === chatStore.messages.length - 1" class="msg-questions">
               <AskQuestionsPanel
                 :prompt="msg.content"
                 :questions="msg.ask_questions"
@@ -149,9 +149,31 @@
           </div>
         </div>
 
-        <div v-if="chatStore.loading" class="msg-row assistant">
+        <!-- 思考过程 + 加载状态 -->
+        <div v-if="chatStore.loading || chatStore.thinkingSteps.length" class="msg-row assistant">
           <div class="msg-avatar"><div class="avt avt-ai"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z"/></svg></div></div>
-          <div class="msg-bubble"><span class="typing">···</span></div>
+          <div class="msg-bubble">
+            <!-- 思考步骤 -->
+            <div v-if="chatStore.thinkingSteps.length" class="thinking-steps">
+              <div
+                v-for="step in chatStore.thinkingSteps"
+                :key="step.node"
+                class="thinking-step"
+                :class="'thinking-step-' + step.status"
+              >
+                <span class="thinking-icon">
+                  <svg v-if="step.status === 'running'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="thinking-spin"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                  <svg v-else-if="step.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                  <svg v-else-if="step.status === 'error'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+                </span>
+                <span class="thinking-label">{{ step.label }}</span>
+                <span v-if="step.detail" class="thinking-detail">{{ step.detail }}</span>
+              </div>
+            </div>
+            <!-- 无思考步骤时显示传统加载 -->
+            <span v-else class="typing">···</span>
+          </div>
         </div>
         <div ref="scrollAnchor" />
       </div>
@@ -261,7 +283,7 @@ function handleSend() {
   const m=inputText.value.trim(); if(!m||chatStore.loading) return
   inputText.value=''
   if(taRef.value) taRef.value.style.height='auto'
-  chatStore.sendMessage(m)
+  chatStore.sendMessageStream(m)
   scrollToBottom()
 }
 function sendText(t:string) {
@@ -285,7 +307,7 @@ function toggleFullscreen() {
 async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
   msg.ask_questions = []
   msg.pending_step = null
-  chatStore.sendMessage(answers.result, {
+  chatStore.sendMessageStream(answers.result, {
     dashboardDraft: {
       goal: '报警分析总览',
       task_id: Number(answers.taskId),
@@ -943,5 +965,61 @@ watch(()=>chatStore.messages.length,()=>scrollToBottom())
   word-break: break-all;
 }
 .rule-example .rule-label { display: block; }
+
+/* ====== 思考过程流式展示 ====== */
+.thinking-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0;
+}
+.thinking-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+  transition: all .2s;
+}
+.thinking-step-running {
+  color: #2563eb;
+}
+.thinking-step-done {
+  color: #059669;
+}
+.thinking-step-error {
+  color: #dc2626;
+}
+.thinking-step-pending {
+  color: #9ca3af;
+}
+.thinking-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.thinking-spin {
+  animation: thinking-spin 1s linear infinite;
+}
+@keyframes thinking-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.thinking-label {
+  font-weight: 500;
+}
+.thinking-detail {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
 
 </style>

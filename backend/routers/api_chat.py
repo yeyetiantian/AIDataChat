@@ -11,9 +11,10 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agents.pivot_agent import process_chat
+from agents.pivot_agent import process_chat, process_chat_stream
 from core.chat_db import (
     add_message,
     get_messages,
@@ -126,3 +127,91 @@ async def chat_query(request: ChatRequest):
     except Exception as e:
         logger.error("聊天分析失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream")
+async def chat_query_stream(request: ChatRequest):
+    """流式 AI 对话分析 — 通过 SSE 实时推送思考过程"""
+    use_db = request.user_id is not None
+    session_id = request.session_id or str(uuid.uuid4())
+
+    # 会话管理（同常规端点）
+    if use_db:
+        existing = get_session(session_id)
+        if not existing:
+            create_session(session_id, request.user_id, "新对话", "chart")
+        db_messages = get_messages(session_id)
+        history = []
+        for m in db_messages:
+            msg = {"role": m["role"], "content": m["content"]}
+            if m.get("charts"):
+                msg["charts"] = m["charts"]
+            if m.get("suggestions"):
+                msg["suggestions"] = m["suggestions"]
+            history.append(msg)
+        if len(history) > 20:
+            history = history[-20:]
+    else:
+        history = []
+
+    dashboard_draft_data = None
+    dashboard_draft_id = ""
+    if request.dashboard_draft is not None:
+        dashboard_draft_data = request.dashboard_draft.model_dump(mode="json")
+        dashboard_draft_id = save_agent_draft(
+            session_id, "dashboard", dashboard_draft_data, request.dashboard_draft.draft_id,
+        )
+
+    async def event_stream():
+        from agents.stream_utils import complete_event as sse_complete
+
+        full_result = {}
+        user_msg_count = 0
+
+        async for sse_event in process_chat_stream(
+            request.message, history, session_id=session_id,
+            task_id=request.task_id,
+            dashboard_draft=dashboard_draft_data,
+        ):
+            yield sse_event
+
+            # 拦截 complete 事件提取完整结果用于持久化
+            if sse_event.startswith("event: complete"):
+                import json as _json
+                prefix = "data: "
+                for line in sse_event.split("\n"):
+                    if line.startswith(prefix):
+                        full_result = _json.loads(line[len(prefix):])
+
+        # 持久化（流结束后）
+        if use_db and full_result:
+            reply = full_result.get("reply", "")
+            charts = full_result.get("charts", []) or []
+            suggestions = full_result.get("suggestions", []) or []
+
+            # 计算用户消息数（用于自动标题）
+            existing_msgs = get_messages(session_id)
+            user_msg_count = len([m for m in existing_msgs if m["role"] == "user"])
+
+            add_message(session_id, "user", request.message)
+            add_message(session_id, "assistant", reply, charts, suggestions,
+                        ask_questions=full_result.get("ask_questions", []),
+                        pending_step=full_result.get("pending_step"),
+                        rules=full_result.get("rules", []),
+                        query_result=full_result.get("query_result"))
+
+            # 首次用户消息自动设置标题
+            if user_msg_count == 1 or (user_msg_count == 0 and len(existing_msgs) == 0):
+                title = request.message[:30] + ("..." if len(request.message) > 30 else "")
+                update_session_title(session_id, title)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "session-id": session_id,
+        },
+    )

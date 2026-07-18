@@ -517,8 +517,13 @@ async def process_dashboard(
     dashboard_draft: dict[str, Any] | None = None,
     trace_collector: TraceCollector | None = None,
     parent_span: SpanNode | None = None,
+    step_callback: Any | None = None,
 ) -> dict[str, Any]:
-    """处理看板生成请求"""
+    """处理看板生成请求
+
+    Args:
+        step_callback: 可选的回调，用于流式推送子步骤 async (node, status, label, detail) -> None
+    """
     import uuid
     import time
 
@@ -557,7 +562,32 @@ async def process_dashboard(
     }
 
     config = {"configurable": {"thread_id": thread_id}}
-    result = await agent.ainvoke(state, config)
+
+    # 看板 Agent 内部节点（按执行顺序）
+    _dash_node_order = ["check_completeness", "generate_charts", "execute", "format_reply"]
+    _dash_node_labels = {
+        "check_completeness": ("dashboard.check", "检查信息完整度", "信息完整"),
+        "generate_charts": ("dashboard.generate", "生成图表配置", "配置生成完成"),
+        "execute": ("dashboard.execute", "执行批量查询", "数据查询完成"),
+        "format_reply": ("dashboard.format", "整理看板结果", "结果已整理"),
+    }
+
+    if step_callback:
+        result = None
+        node_idx = 0
+        async for output in agent.astream(state, config, stream_mode="values"):
+            if node_idx < len(_dash_node_order):
+                node_name = _dash_node_order[node_idx]
+                node_idx += 1
+                labels = _dash_node_labels.get(node_name)
+                if labels:
+                    await step_callback(labels[0], "done", labels[2])
+            if isinstance(output, dict):
+                result = output
+        if result is None:
+            result = {}
+    else:
+        result = await agent.ainvoke(state, config)
 
     has_error = bool(result.get("error")) or bool(
         [ch for ch in (result.get("charts") or []) if ch.get("error")]

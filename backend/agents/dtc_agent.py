@@ -421,12 +421,14 @@ async def process_dtc(
     session_id: str | None = None,
     trace_collector: TraceCollector | None = None,
     parent_span: SpanNode | None = None,
+    step_callback: Any | None = None,
 ) -> dict[str, Any]:
     """处理 DTC 数据查询请求
 
     Args:
         trace_collector: 来自 pivot_agent 的 TraceCollector
         parent_span: 父级 Span
+        step_callback: 可选回调，用于流式推送子步骤 async (node, status, label, detail) -> None
     """
     started_at = time.time()
 
@@ -458,10 +460,35 @@ async def process_dtc(
         "trace_span": agent_span,
     }
 
-    result = await build_dtc_agent().ainvoke(
-        state,
-        {"configurable": {"thread_id": str(uuid.uuid4())}},
-    )
+    if step_callback:
+        result = None
+        _dtc_node_order = ["analyze_dtc", "execute_dtc", "format_reply"]
+        _dtc_node_labels = {
+            "analyze_dtc": ("dtc.analyze", "分析 DTC 查询条件", "SQL 已生成"),
+            "execute_dtc": ("dtc.execute", "执行 DTC 查询", "数据查询完成"),
+            "format_reply": ("dtc.format", "整理 DTC 结果", "结果已整理"),
+        }
+        node_idx = 0
+        async for output in build_dtc_agent().astream(
+            state,
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+            stream_mode="values",
+        ):
+            if node_idx < len(_dtc_node_order):
+                node_name = _dtc_node_order[node_idx]
+                node_idx += 1
+                labels = _dtc_node_labels.get(node_name)
+                if labels:
+                    await step_callback(labels[0], "done", labels[2])
+            if isinstance(output, dict):
+                result = output
+        if result is None:
+            result = {}
+    else:
+        result = await build_dtc_agent().ainvoke(
+            state,
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+        )
 
     if trace_collector is None:
         tc.save_to_db()

@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Any, Literal, Optional
+from typing import Any, AsyncGenerator, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -210,3 +211,182 @@ async def process_chat(
     result["execution_time_ms"] = round(elapsed, 2)
     result["trace_id"] = tc.trace_id
     return result
+
+# ============================================================
+# 流式处理（SSE 事件推送）
+# ============================================================
+
+async def process_chat_stream(
+    message: str,
+    history: list[dict[str, str]] | None = None,
+    session_id: str | None = None,
+    task_id: int | None = None,
+    dashboard_draft: dict[str, Any] | None = None,
+) -> AsyncGenerator[str, None]:
+    """流式处理聊天请求 — 逐节点推送 SSE 事件
+
+    使用 asyncio.Queue 实现子 Agent 内部步骤逐步推送：
+    Step1 running → [等待完成] → Step1 done → Step2 running → ...
+    """
+    from agents.stream_utils import thinking_event, complete_event, error_event
+
+    start = time.time()
+    tc = TraceCollector(
+        session_id=session_id or "",
+        request_message=message,
+        agent_name="pivot_agent",
+    )
+
+    tc.root.input = {
+        "api": "POST /api/chat/stream",
+        "message": message,
+        "session_id": session_id,
+        "history_count": len(history or []),
+        "task_id": task_id,
+        "has_dashboard_draft": dashboard_draft is not None,
+    }
+
+    # ====== 1. 意图识别 ======
+    yield thinking_event("intent", "running", "正在分析您的意图…")
+    intent_span = tc.root.add_child("intent_recognition", "llm", input={"message": message})
+    intent, reason = _recognize_intent(message, history)
+    intent_span.finish(output={"intent": intent, "reason": reason})
+    logger.info("意图识别: %s (%s)", intent, reason)
+    yield thinking_event("intent", "done", "已识别需求类型", f"意图: {intent} — {reason}")
+
+    # 子 Agent 步骤定义
+    _agent_steps = {
+        "chart": [
+            ("chart.analyze", "分析数据需求", "分析完成"),
+            ("chart.validate", "校验配置", "配置校验通过"),
+            ("chart.execute", "查询数据", "数据查询完成"),
+            ("chart.format", "整理结果", "结果已整理"),
+        ],
+        "dashboard": [
+            ("dashboard.check", "检查信息完整度", "信息完整"),
+            ("dashboard.generate", "生成图表配置", "配置生成完成"),
+            ("dashboard.execute", "执行批量查询", "数据查询完成"),
+            ("dashboard.format", "整理看板结果", "结果已整理"),
+        ],
+        "rule": [
+            ("rule.analyze", "分析规则需求", "分析完成"),
+            ("rule.format", "整理结果", "推荐已生成"),
+        ],
+        "dtc": [
+            ("dtc.analyze", "分析 DTC 查询条件", "SQL 已生成"),
+            ("dtc.execute", "执行 DTC 查询", "数据查询完成"),
+            ("dtc.format", "整理 DTC 结果", "结果已整理"),
+        ],
+        "chat": [
+            ("chat.reply", "生成回复", "回复完成"),
+        ],
+    }
+
+    steps = _agent_steps.get(intent, [("agent.run", "执行处理", "处理完成")])
+    agent_label_map = {
+        "chart": "生成图表配置", "dashboard": "生成看板图表",
+        "rule": "推荐规则函数", "dtc": "查询 DTC 数据", "chat": "回复用户",
+    }
+    agent_label = agent_label_map.get(intent, "处理请求")
+
+    # 创建事件队列，用于子 Agent 回调 → 主循环逐步推送
+    step_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    async def _step_callback(node: str, status: str, label: str, detail: str = "") -> None:
+        await step_queue.put(thinking_event(node, status, label, detail))
+
+    # ====== 2. 运行子 Agent（后台任务）======
+
+    async def _run_agent():
+        if intent == "chart":
+            from agents.chart_agent import process_chart as chart_process
+            return await chart_process(
+                message, history, session_id=session_id,
+                trace_collector=tc, parent_span=tc.root,
+                step_callback=_step_callback,
+            )
+        elif intent == "dashboard":
+            from agents.dashboard_agent import process_dashboard
+            return await process_dashboard(
+                message, history, session_id=session_id, intent=intent,
+                dashboard_draft=dashboard_draft,
+                trace_collector=tc, parent_span=tc.root,
+                step_callback=_step_callback,
+            )
+        elif intent == "rule":
+            from agents.rule_agent import process_rule as rule_process
+            return await rule_process(
+                message, history, session_id=session_id, task_id=task_id,
+                trace_collector=tc, parent_span=tc.root,
+            )
+        elif intent == "dtc":
+            from agents.dtc_agent import process_dtc as dtc_process
+            return await dtc_process(
+                message, history, session_id=session_id,
+                trace_collector=tc, parent_span=tc.root,
+                step_callback=_step_callback,
+            )
+        else:
+            from agents.chat_agent import process_chat as chat_process
+            return await chat_process(
+                message, history, session_id=session_id,
+                trace_collector=tc, parent_span=tc.root,
+            )
+
+    agent_task = asyncio.create_task(_run_agent())
+
+    # ====== 3. 逐步推送 ======
+    try:
+        # 有 step_callback 的 Agent：running → 等待 done → 下一步 → ...
+        # 无 step_callback 的 Agent：先展示全部 running → 等待 Agent → 全部 done
+        has_callback = intent in ("chart", "dtc", "dashboard")
+
+        if has_callback:
+            for step_id, run_label, done_label in steps:
+                yield thinking_event(step_id, "running", run_label)
+                # 等待步骤回调，每 0.5s 检查一次，避免超时后跳过后面的步骤
+                while True:
+                    try:
+                        done_event = await asyncio.wait_for(step_queue.get(), timeout=0.5)
+                        yield done_event
+                        break
+                    except asyncio.TimeoutError:
+                        # 如果 Agent 已结束但回调还没到，直接标记完成
+                        if agent_task.done():
+                            yield thinking_event(step_id, "done", done_label)
+                            break
+                        # 否则继续等待回调
+        else:
+            # 先展示全部 running 步骤
+            for step_id, run_label, _ in steps:
+                yield thinking_event(step_id, "running", run_label)
+
+        # 获取子 Agent 的完整结果（无回调的 Agent 在此处等待实际完成）
+        if not agent_task.done():
+            result = await agent_task
+        else:
+            result = agent_task.result()
+
+        # 无回调的 Agent：Agent 完成后一次性标记所有步骤完成
+        if not has_callback:
+            for step_id, _, done_label in steps:
+                yield thinking_event(step_id, "done", done_label)
+
+        yield thinking_event("agent", "done", f"{agent_label}完成")
+
+    except Exception as exc:
+        logger.exception("子 Agent 执行失败")
+        yield thinking_event("agent", "error", f"{agent_label}失败", str(exc))
+        yield error_event(str(exc))
+        tc.root.finish(error=str(exc))
+        tc.save_to_db()
+        return
+
+    # ====== 4. 完成 ======
+    elapsed = (time.time() - start) * 1000
+    tc.root.finish(output={**result, "execution_time_ms": round(elapsed, 2)})
+    tc.save_to_db()
+    result["execution_time_ms"] = round(elapsed, 2)
+    result["trace_id"] = tc.trace_id
+
+    yield complete_event(result)

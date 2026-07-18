@@ -1,4 +1,4 @@
-/** AI 对话状态管理 — 后端持久化 + 用户体系 */
+/** AI 对话状态管理 — 后端持久化 + 用户体系 + 流式思考 */
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -13,13 +13,14 @@ export interface ChatMessage {
   ask_questions?: any[]
   pending_step?: string | null
   dashboard_draft_id?: string
-  query_result?: {
-    sql: string
-    explanation?: string
-    columns: string[]
-    rows: Record<string, any>[]
-    total: number
-  } | null
+  query_result?: Record<string, any> | null
+}
+
+export interface ThinkingStep {
+  node: string
+  status: 'pending' | 'running' | 'done' | 'error'
+  label: string
+  detail?: string
 }
 
 export interface ChatSession {
@@ -49,6 +50,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref<string>('')
   const loading = ref(false)
+  const thinkingSteps = ref<ThinkingStep[]>([])
   const mode = ref<'chart' | 'rule'>('chart')
   const userConfig = ref('{\n  "name": "用户",\n  "preferences": {}\n}')
   const user = ref<{id:number;username:string;role:string} | null>(null)
@@ -246,6 +248,120 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 流式发送消息 — 通过 SSE 实时接收思考步骤 */
+  async function sendMessageStream(msg: string, options?: { dashboardDraft?: Record<string, any> }) {
+    if (!msg.trim() || loading.value) return
+    loading.value = true
+    thinkingSteps.value = []
+
+    if (!activeSession.value) {
+      await createSession()
+    }
+
+    const session = activeSession.value!
+    session.messages.push({ role: 'user', content: msg })
+    if (session.messages.filter(m => m.role === 'user').length === 1) {
+      session.title = formatTitle(msg)
+    }
+
+    try {
+      const resp = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: msg,
+          session_id: session.id,
+          user_id: user.value?.id,
+          dashboard_draft: options?.dashboardDraft,
+        }),
+      })
+      if (!resp.ok) throw new Error('AI 分析失败')
+
+      const reader = resp.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let currentEvent = ''
+      let currentData = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+
+          // 空行 → 事件结束，处理累积的数据
+          if (trimmed === '') {
+            if (currentEvent && currentData) {
+              try {
+                const parsed = JSON.parse(currentData)
+                if (currentEvent === 'thinking') {
+                  const step: ThinkingStep = parsed
+                  const idx = thinkingSteps.value.findIndex(s => s.node === step.node)
+                  if (idx >= 0) {
+                    thinkingSteps.value[idx] = step
+                    thinkingSteps.value = [...thinkingSteps.value]
+                  } else {
+                    thinkingSteps.value.push(step)
+                  }
+                } else if (currentEvent === 'complete') {
+                  const result = parsed
+                  thinkingSteps.value = []
+                  session.messages.push({
+                    role: 'assistant',
+                    content: result.reply || '已生成分析配置',
+                    charts: result.charts || null,
+                    suggestions: result.suggestions || [],
+                    rules: result.rules || [],
+                    ask_questions: result.ask_questions || [],
+                    pending_step: result.pending_step || null,
+                    dashboard_draft_id: result.dashboard_draft_id || '',
+                    query_result: result.query_result || null,
+                  })
+                } else if (currentEvent === 'error') {
+                  throw new Error(parsed.message || '处理出错')
+                }
+              } catch (e: any) {
+                // JSON 解析失败（非关键，继续下一事件）
+                if (currentEvent === 'complete' || currentEvent === 'error') {
+                  throw e
+                }
+              }
+              currentEvent = ''
+              currentData = ''
+            }
+            continue
+          }
+
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+            currentData = ''
+          } else if (line.startsWith('data: ')) {
+            currentData += line.slice(6)
+          } else if (currentEvent && trimmed !== '') {
+            // 续行：data: 行被 TCP 分片截断，续行不带 data: 前缀
+            currentData += line
+          }
+        }
+      }
+    } catch (e: any) {
+      session.messages.push({
+        role: 'assistant',
+        content: `错误: ${e.message || 'AI 分析失败'}`,
+        ask_questions: [],
+        pending_step: null,
+      })
+    } finally {
+      loading.value = false
+      // error 时也立即清除思考步骤
+      thinkingSteps.value = []
+    }
+  }
+
   function updateUserConfig(config: string) {
     userConfig.value = config
     try { localStorage.setItem('ai_chat_user_config', config) } catch {}
@@ -275,9 +391,9 @@ export const useChatStore = defineStore('chat', () => {
   // 同步恢复本地缓存用户（不自动 init）
 
   return {
-    sessions, activeSessionId, loading, mode, userConfig, user, userList,
+    sessions, activeSessionId, loading, thinkingSteps, mode, userConfig, user, userList,
     activeSession, messages,
-    sendMessage, newSession, switchSession, deleteSession, setMode,
+    sendMessage, sendMessageStream, newSession, switchSession, deleteSession, setMode,
     updateUserConfig, clearAllSessions, init, fetchSessions, login,
   }
 })

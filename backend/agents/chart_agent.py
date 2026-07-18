@@ -590,12 +590,14 @@ async def process_chart(
     session_id: str | None = None,
     trace_collector: TraceCollector | None = None,
     parent_span: SpanNode | None = None,
+    step_callback: Any | None = None,
 ) -> dict[str, Any]:
     """处理单图表分析请求
 
     Args:
         trace_collector: 来自 pivot_agent 的 TraceCollector（实现全链路追踪）
         parent_span: 父级 Span
+        step_callback: 可选的回调，用于流式推送子步骤 async (node, status, label, detail) -> None
     """
     import uuid
     import time
@@ -635,7 +637,34 @@ async def process_chart(
     }
 
     config = {"configurable": {"thread_id": thread_id}}
-    result = await agent.ainvoke(state, config)
+
+    # 图表 Agent 内部节点（按执行顺序）
+    _chart_node_order = ["analyze", "validate", "execute", "format_reply"]
+    _chart_node_labels = {
+        "analyze": ("chart.analyze", "分析数据需求", "分析完成"),
+        "validate": ("chart.validate", "校验配置", "配置校验通过"),
+        "execute": ("chart.execute", "查询数据", "数据查询完成"),
+        "format_reply": ("chart.format", "整理结果", "结果已整理"),
+    }
+
+    if step_callback:
+        result = None
+        node_idx = 0
+        async for output in agent.astream(state, config, stream_mode="values"):
+            # 每个 output 是执行完一个节点后的完整 state
+            if node_idx < len(_chart_node_order):
+                node_name = _chart_node_order[node_idx]
+                node_idx += 1
+                labels = _chart_node_labels.get(node_name)
+                if labels:
+                    await step_callback(labels[0], "done", labels[2])
+            # 取最后一个 state 作为结果
+            if isinstance(output, dict):
+                result = output
+        if result is None:
+            result = {}
+    else:
+        result = await agent.ainvoke(state, config)
 
     has_error = bool(result.get("error")) or bool(
         [ch for ch in (result.get("charts") or []) if ch.get("error")]

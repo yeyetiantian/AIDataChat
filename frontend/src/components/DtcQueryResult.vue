@@ -164,6 +164,11 @@ if (!isLegacy.value) {
 }
 
 function pageRows(tab: TableData) {
+  // 旧版单表模式使用 legacyPage，双表模式使用 tabPages
+  if (isLegacy.value) {
+    const start = (legacyPage.value - 1) * pageSize
+    return (tab.rows || []).slice(start, start + pageSize)
+  }
   const page = tabPages[tab.label] || 1
   const start = (page - 1) * pageSize
   return (tab.rows || []).slice(start, start + pageSize)
