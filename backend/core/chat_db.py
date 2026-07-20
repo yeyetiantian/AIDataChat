@@ -805,11 +805,13 @@ def _scan_trace_files() -> list[dict]:
     return traces
 
 
-def list_trace_summaries(limit: int = 50, offset: int = 0, session_id: str | None = None) -> list[dict]:
+def list_trace_summaries(limit: int = 50, offset: int = 0, session_id: str | None = None, agent_name: str | None = None) -> list[dict]:
     """列出 trace 摘要列表（不含 root_span）"""
     all_traces = _scan_trace_files()
     if session_id:
         all_traces = [t for t in all_traces if t.get("session_id") == session_id]
+    if agent_name:
+        all_traces = [t for t in all_traces if t.get("agent_name") == agent_name]
     # 摘要：只返回元信息，不返回 root_span
     summaries = []
     for t in all_traces[offset:offset + limit]:
@@ -859,6 +861,48 @@ def get_trace_stats() -> dict:
     success = sum(1 for t in all_traces if t.get("status") == "success")
     error = sum(1 for t in all_traces if t.get("status") == "error")
     return {"total": total, "success": success, "error": error}
+
+
+def delete_trace(trace_id: str) -> bool:
+    """删除单个 trace JSON 文件"""
+    # 新格式: trace_{trace_id}.json
+    trace_path = os.path.join(_get_trace_dir(), f"trace_{trace_id}.json")
+    if os.path.isfile(trace_path):
+        os.remove(trace_path)
+        return True
+    # 旧格式：扫描所有 json 文件匹配 id
+    for fp in _glob.glob(os.path.join(_get_trace_dir(), "*.json")):
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("id") == trace_id:
+                os.remove(fp)
+                return True
+        except (json.JSONDecodeError, OSError):
+            continue
+    return False
+
+
+def clear_traces(agent_name: str | None = None) -> int:
+    """清空 trace 文件，可选只清空指定 agent 类型
+
+    Returns:
+        删除的文件数量
+    """
+    count = 0
+    for fp in _glob.glob(os.path.join(_get_trace_dir(), "*.json")):
+        if agent_name:
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("agent_name") != agent_name:
+                    continue
+            except (json.JSONDecodeError, OSError):
+                # 无法解析也删除
+                pass
+        os.remove(fp)
+        count += 1
+    return count
 
 
 # ============================================================

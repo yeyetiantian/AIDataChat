@@ -81,6 +81,20 @@
             <h3>Trace 日志</h3>
             <div class="section-header-actions">
               <el-select
+                v-model="filterAgentName"
+                placeholder="全部类型"
+                size="small"
+                clearable
+                style="width:160px"
+              >
+                <el-option
+                  v-for="a in agentNameOptions"
+                  :key="a.value"
+                  :label="a.label"
+                  :value="a.value"
+                />
+              </el-select>
+              <el-select
                 v-model="filterSessionId"
                 placeholder="全部会话"
                 size="small"
@@ -94,6 +108,9 @@
                   :value="s.value"
                 />
               </el-select>
+              <el-button size="small" type="danger" plain @click="handleClearAll">
+                <el-icon><Delete /></el-icon> 清空全部
+              </el-button>
               <el-button size="small" @click="refreshLogs">
                 <el-icon><Refresh /></el-icon> 刷新
               </el-button>
@@ -130,6 +147,13 @@
                     class="trace-type-badge"
                     :class="trace.status === 'success' ? 'trace-type-agent' : 'trace-type-tool'"
                   >{{ trace.agent_name || 'Agent' }}</span>
+                  <button
+                    class="trace-delete-btn"
+                    title="删除"
+                    @click.stop="handleDeleteTrace(trace)"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                  </button>
                   <button
                     class="trace-expand-btn"
                     :class="{ 'is-expanded': trace._expanded }"
@@ -227,7 +251,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Loading } from '@element-plus/icons-vue'
+import { Refresh, Loading, Delete } from '@element-plus/icons-vue'
 import mermaid from 'mermaid'
 import TraceSpanNode from '@/components/TraceSpanNode.vue'
 
@@ -413,11 +437,19 @@ async function copyMermaidCode() {
 const traces = ref<TraceSummary[]>([])
 const loadingTraces = ref(false)
 const filterSessionId = ref('')
+const filterAgentName = ref('')
 const sessionOptions = ref<{ value: string; label: string }[]>([])
+const agentNameOptions = ref<{ value: string; label: string }[]>([])
 
 const filteredTraces = computed(() => {
-  if (!filterSessionId.value) return traces.value
-  return traces.value.filter(t => t.session_id === filterSessionId.value)
+  let list = traces.value
+  if (filterSessionId.value) {
+    list = list.filter(t => t.session_id === filterSessionId.value)
+  }
+  if (filterAgentName.value) {
+    list = list.filter(t => t.agent_name === filterAgentName.value)
+  }
+  return list
 })
 
 /** 从后端加载 trace 摘要列表（不加载详情，点击展开时按需加载） */
@@ -446,6 +478,16 @@ async function fetchRealTraces() {
       }
     }
     sessionOptions.value = Array.from(seen.entries()).map(([value, label]) => ({ value, label }))
+
+    // Update agent name filter options
+    const agentNames = new Set<string>()
+    for (const t of traces.value) {
+      if (t.agent_name) agentNames.add(t.agent_name)
+    }
+    agentNameOptions.value = Array.from(agentNames).map(name => ({
+      value: name,
+      label: name,
+    }))
   } catch (e) {
     console.error('Failed to load traces:', e)
     ElMessage.error('加载 Trace 日志失败')
@@ -477,6 +519,35 @@ function onToggleSpan(span: TraceSpan) {
 async function refreshLogs() {
   await fetchRealTraces()
   ElMessage.success('Trace 日志已刷新')
+}
+
+/** 删除单个 Trace */
+async function handleDeleteTrace(trace: TraceSummary) {
+  try {
+    const resp = await fetch(`/api/monitor/traces/${trace.id}`, { method: 'DELETE' })
+    if (!resp.ok) throw new Error('删除失败')
+    // 从本地列表中移除
+    const idx = traces.value.indexOf(trace)
+    if (idx >= 0) traces.value.splice(idx, 1)
+    ElMessage.success('已删除')
+  } catch (e) {
+    ElMessage.error('删除失败')
+  }
+}
+
+/** 清空全部 Trace */
+async function handleClearAll() {
+  try {
+    const params = new URLSearchParams()
+    if (filterAgentName.value) params.set('agent_name', filterAgentName.value)
+    const url = `/api/monitor/traces${params.toString() ? '?' + params.toString() : ''}`
+    const resp = await fetch(url, { method: 'DELETE' })
+    if (!resp.ok) throw new Error('清空失败')
+    traces.value = []
+    ElMessage.success('已清空所有 Trace 日志')
+  } catch (e) {
+    ElMessage.error('清空失败')
+  }
 }
 
 /* ========== Span 详情弹窗 ========== */
@@ -887,6 +958,25 @@ function handleOpenDetailEvent(e: Event) {
   color: #909399;
   cursor: pointer;
   transition: all 0.15s;
+}
+
+.trace-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #c0c4cc;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.trace-delete-btn:hover {
+  background: #fef0f0;
+  color: #f56c6c;
 }
 
 .trace-expand-btn:hover {
