@@ -638,31 +638,83 @@ async def process_chart(
 
     config = {"configurable": {"thread_id": thread_id}}
 
-    # 图表 Agent 内部节点（按执行顺序）
-    _chart_node_order = ["analyze", "validate", "execute", "format_reply"]
-    _chart_node_labels = {
-        "analyze": ("chart.analyze", "分析数据需求", "分析完成"),
-        "validate": ("chart.validate", "校验配置", "配置校验通过"),
-        "execute": ("chart.execute", "查询数据", "数据查询完成"),
-        "format_reply": ("chart.format", "整理结果", "结果已整理"),
-    }
-
     if step_callback:
         result = None
-        node_idx = 0
-        async for output in agent.astream(state, config, stream_mode="values"):
-            # 每个 output 是执行完一个节点后的完整 state
-            if node_idx < len(_chart_node_order):
-                node_name = _chart_node_order[node_idx]
-                node_idx += 1
-                labels = _chart_node_labels.get(node_name)
-                if labels:
-                    await step_callback(labels[0], "done", labels[2])
-            # 取最后一个 state 作为结果
-            if isinstance(output, dict):
-                result = output
+        _chart_node_labels = {
+            "analyze": ("chart.analyze", "分析数据需求", "分析完成"),
+            "validate": ("chart.validate", "校验配置", "配置校验通过"),
+            "execute": ("chart.execute", "查询数据", "数据查询完成"),
+            "format_reply": ("chart.format", "整理结果", "结果已整理"),
+        }
+        _node_next = {
+            "analyze": "validate",
+            "validate": "execute",
+            "execute": "format_reply",
+            "format_reply": None,
+        }
+
+        def _chart_detail(node_name: str, full: dict) -> str:
+            if node_name == "analyze":
+                charts = full.get("charts") or []
+                reply = full.get("reply") or ""
+                if charts:
+                    titles = [ch.get("title", "") or "" for ch in charts[:3]]
+                    return f"生成 {len(charts)} 个图表: {', '.join(filter(None, titles))}"[:300]
+                if reply:
+                    return reply[:300]
+                return "分析完成"
+            elif node_name == "validate":
+                err = full.get("validation_error")
+                if err:
+                    return f"校验问题: {err[:200]}"
+                return "配置校验通过"
+            elif node_name == "execute":
+                charts = full.get("charts") or []
+                total = sum(len(ch.get("data", []) or []) for ch in charts)
+                errors = [ch.get("error") for ch in charts if ch.get("error")]
+                parts = []
+                if total:
+                    parts.append(f"共 {total} 条数据")
+                if errors:
+                    parts.append(f"失败 {len(errors)} 个")
+                return "、".join(parts) if parts else "数据查询完成"
+            elif node_name == "format_reply":
+                reply = full.get("reply") or ""
+                return reply[:300] if reply else "结果已整理"
+            return ""
+
+        full_state = dict(state)
+        entry = _chart_node_labels["analyze"]
+        await step_callback(entry[0], "running", entry[1], "")
+
+        async for update in agent.astream(state, config, stream_mode="updates"):
+            for node_name, partial in update.items():
+                full_state.update(partial)
+                result = full_state
+
+                if node_name in _chart_node_labels:
+                    labels = _chart_node_labels[node_name]
+                    detail = _chart_detail(node_name, full_state)
+                    # 检查各节点的特定错误字段
+                    err_msg = ""
+                    if node_name == "analyze":
+                        err_msg = full_state.get("error") or ""
+                    elif node_name == "validate":
+                        err_msg = full_state.get("validation_error") or ""
+                    elif node_name == "execute":
+                        err_msg = full_state.get("execution_error") or ""
+                    if err_msg:
+                        await step_callback(labels[0], "error", labels[2], f"出错: {err_msg[:200]}")
+                    else:
+                        await step_callback(labels[0], "done", labels[2], detail)
+
+                    next_node = _node_next.get(node_name)
+                    if next_node and next_node in _chart_node_labels:
+                        next_labels = _chart_node_labels[next_node]
+                        await step_callback(next_labels[0], "running", next_labels[1], "")
+
         if result is None:
-            result = {}
+            result = full_state
     else:
         result = await agent.ainvoke(state, config)
 

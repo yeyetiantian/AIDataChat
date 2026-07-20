@@ -29,7 +29,6 @@
       </div>
     </aside>
 
-
     <!-- 主面板 -->
     <div class="dialog-main">
       <!-- 顶栏 -->
@@ -307,6 +306,7 @@ function toggleFullscreen() {
 async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
   msg.ask_questions = []
   msg.pending_step = null
+  msg.content = '看板需求已确认，问卷信息已提交，正在生成看板...'
   chatStore.sendMessageStream(answers.result, {
     dashboardDraft: {
       goal: '报警分析总览',

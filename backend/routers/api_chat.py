@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from agents.pivot_agent import process_chat, process_chat_stream
 from core.chat_db import (
     add_message,
+    clear_draft_message,
     get_messages,
     get_session,
     create_session,
@@ -204,6 +205,15 @@ async def chat_query_stream(request: ChatRequest):
             if user_msg_count == 1 or (user_msg_count == 0 and len(existing_msgs) == 0):
                 title = request.message[:30] + ("..." if len(request.message) > 30 else "")
                 update_session_title(session_id, title)
+
+            # 看板问卷提交后，清理之前的草案消息
+            if request.dashboard_draft is not None:
+                cleared = clear_draft_message(
+                    session_id,
+                    new_content="看板需求已确认，问卷信息已提交，正在生成本地...",
+                )
+                if cleared:
+                    logger.info("已清理看板草案消息 (session=%s)", session_id)
 
     return StreamingResponse(
         event_stream(),

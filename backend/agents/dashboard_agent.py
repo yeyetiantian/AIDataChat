@@ -36,6 +36,70 @@ from agents.chart_agent import (
 from services.query_preprocessor import ParsedChartRequest, preprocess_chart_query
 from models import PivotConfig
 
+
+# ============================================================
+# 任务名提取
+# ============================================================
+
+def _extract_task_from_message(user_msg: str) -> tuple[str | None, str | None]:
+    """从用户输入中识别任务，返回 (task_id_str, task_name) 或 (None, None)
+
+    采用多策略级联：
+      1. 精确子串匹配 — TASK_NAME 是 user_msg 的子串
+      2. 自然语言提取 — 从“为XX创建看板”模式关键词 → 去空格模糊匹配
+      3. 任意 token 匹配 — user_msg 中 ≥2 字符的片段逐条匹配
+    """
+    try:
+        from core.chat_db import _get_conn
+        conn = _get_conn()
+
+        # 策略1: 精确子串匹配（任务全名在用户输入中）
+        cur = conn.execute(
+            "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE ? LIKE '%' || TASK_NAME || '%' AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
+            (user_msg,),
+        )
+        row = cur.fetchone()
+        if row:
+            return str(row[0]), row[1]
+
+        import re
+
+        # 策略2: 从“为XX创建看板”“给XX看板”“关联XX看板”中提取关键词
+        patterns = [
+            r'[为给关联对](.+?)(?:的)?(?:创建|建立|新建|做一个?|生成)(?:的)?(?:看板|仪表盘|大屏)',
+            r'[为给关联对](.+?)(?:的)?(?:看板|仪表盘|大屏)',
+            r'(?:给|对|把)(.+?)(?:的)?(?:创建|建立|生成)',
+        ]
+        for pat in patterns:
+            m = re.search(pat, user_msg)
+            if m:
+                keyword = m.group(1).strip()
+                if len(keyword) >= 2:
+                    # 去除空格后再匹配（用户打字习惯与数据库可能不同）
+                    no_space = keyword.replace(' ', '')
+                    cur = conn.execute(
+                        "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE REPLACE(TASK_NAME, ' ', '') LIKE ? AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
+                        (f"%{no_space}%",),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return str(row[0]), row[1]
+
+        # 策略3: 用 user_msg 中的每个 ≥2 字符 token 去模糊匹配
+        tokens = [t for t in re.split(r'[\s,，、]+', user_msg) if len(t) >= 2]
+        for token in tokens:
+            no_space_token = token.replace(' ', '')
+            cur = conn.execute(
+                "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE REPLACE(TASK_NAME, ' ', '') LIKE ? AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
+                (f"%{no_space_token}%",),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row[0]), row[1]
+    except Exception as exc:
+        logger.warning("提取任务名称失败: %s", exc)
+    return None, None
+
 logger = logging.getLogger("dashboard_agent")
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_logs")
@@ -143,6 +207,21 @@ def _extract_chart_infos_from_draft(draft: dict) -> list[str]:
     return infos
 
 
+def _init_dashboard_questionnaire(state: dict, user_msg: str):
+    """初始化看板问卷，并尝试从用户输入中预填任务信息"""
+    state["ask_questions"] = _build_dashboard_questionnaire()
+    preset_id, preset_name = _extract_task_from_message(user_msg)
+    if preset_id and preset_name:
+        for q in state["ask_questions"]:
+            if q["id"] == "task_id":
+                q["preset_value"] = preset_id
+                q["preset_label"] = preset_name
+                break
+        state["reply"] = f"好的，我来帮您创建一个看板！已识别任务「{preset_name}」，请确认以下信息："
+    else:
+        state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
+
+
 # ============================================================
 # Agent Nodes
 # ============================================================
@@ -199,8 +278,7 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
 
     if is_vague_dashboard_creation:
         logger.info("check_completeness: 模糊创建看板请求，返回问卷")
-        state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
-        state["ask_questions"] = _build_dashboard_questionnaire()
+        _init_dashboard_questionnaire(state, _user_msg)
         state["pending_step"] = "awaiting_questions"
         state["chart_infos"] = []
         if sp:
@@ -263,8 +341,7 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
                 state["reply"] = "好的，正在生成图表配置..."
             else:
                 logger.info("check_completeness: 信息不完善：%s", completeness.reason)
-                state["reply"] = completeness.reply or "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
-                state["ask_questions"] = _build_dashboard_questionnaire()
+                _init_dashboard_questionnaire(state, _user_msg)
                 state["pending_step"] = "awaiting_questions"
                 state["chart_infos"] = []
 
@@ -275,8 +352,7 @@ def check_completeness_node(state: DashboardState) -> DashboardState:
             state["chart_infos"] = [state["user_message"]]
             state["reply"] = "好的，正在生成图表配置..."
         else:
-            state["reply"] = "好的，我来帮您创建一个看板！请先告诉我一些基本信息："
-            state["ask_questions"] = _build_dashboard_questionnaire()
+            _init_dashboard_questionnaire(state, _user_msg)
             state["pending_step"] = "awaiting_questions"
             state["chart_infos"] = []
         if sp:
@@ -563,29 +639,82 @@ async def process_dashboard(
 
     config = {"configurable": {"thread_id": thread_id}}
 
-    # 看板 Agent 内部节点（按执行顺序）
-    _dash_node_order = ["check_completeness", "generate_charts", "execute", "format_reply"]
-    _dash_node_labels = {
-        "check_completeness": ("dashboard.check", "检查信息完整度", "信息完整"),
-        "generate_charts": ("dashboard.generate", "生成图表配置", "配置生成完成"),
-        "execute": ("dashboard.execute", "执行批量查询", "数据查询完成"),
-        "format_reply": ("dashboard.format", "整理看板结果", "结果已整理"),
-    }
-
     if step_callback:
         result = None
-        node_idx = 0
-        async for output in agent.astream(state, config, stream_mode="values"):
-            if node_idx < len(_dash_node_order):
-                node_name = _dash_node_order[node_idx]
-                node_idx += 1
-                labels = _dash_node_labels.get(node_name)
-                if labels:
-                    await step_callback(labels[0], "done", labels[2])
-            if isinstance(output, dict):
-                result = output
+        _dash_node_labels = {
+            "check_completeness": ("dashboard.check", "检查信息完整度", "信息完整"),
+            "generate_charts": ("dashboard.generate", "生成图表配置", "配置生成完成"),
+            "execute": ("dashboard.execute", "执行批量查询", "数据查询完成"),
+            "format_reply": ("dashboard.format", "整理看板结果", "结果已整理"),
+        }
+
+        def _dash_next(node_name: str, full: dict) -> str | None:
+            if node_name == "check_completeness":
+                if full.get("pending_step") == "awaiting_questions":
+                    return "format_reply"
+                if full.get("chart_infos"):
+                    return "generate_charts"
+                return "format_reply"
+            elif node_name == "generate_charts":
+                return "execute"
+            elif node_name == "execute":
+                return "format_reply"
+            return None
+
+        def _dash_detail(node_name: str, full: dict) -> str:
+            if node_name == "check_completeness":
+                if full.get("pending_step") == "awaiting_questions":
+                    return "信息不完善，需要向用户提问"
+                infos = full.get("chart_infos") or []
+                if infos:
+                    return f"识别到 {len(infos)} 个图表需求"
+                reply = full.get("reply") or ""
+                return reply[:200] if reply else "信息检查完成"
+            elif node_name == "generate_charts":
+                charts = full.get("charts") or []
+                reply = full.get("reply") or ""
+                if charts:
+                    titles = [ch.get("title", "") or "" for ch in charts[:3]]
+                    return f"生成 {len(charts)} 个配置: {', '.join(filter(None, titles))}"[:300]
+                return reply[:200] if reply else "配置生成完成"
+            elif node_name == "execute":
+                charts = full.get("charts") or []
+                total = sum(len(ch.get("data", []) or []) for ch in charts)
+                errors = [ch.get("error") for ch in charts if ch.get("error")]
+                parts = []
+                if total:
+                    parts.append(f"共 {total} 条数据")
+                if errors:
+                    parts.append(f"失败 {len(errors)} 个")
+                return "、".join(parts) if parts else "批量查询完成"
+            elif node_name == "format_reply":
+                reply = full.get("reply") or ""
+                return reply[:300] if reply else "结果已整理"
+            return ""
+
+        full_state = dict(state)
+        entry = _dash_node_labels["check_completeness"]
+        await step_callback(entry[0], "running", entry[1], "")
+
+        async for update in agent.astream(state, config, stream_mode="updates"):
+            for node_name, partial in update.items():
+                full_state.update(partial)
+                result = full_state
+                if node_name in _dash_node_labels:
+                    labels = _dash_node_labels[node_name]
+                    detail = _dash_detail(node_name, full_state)
+                    if full_state.get("error"):
+                        await step_callback(labels[0], "error", labels[2], f"出错: {full_state['error']}")
+                    else:
+                        await step_callback(labels[0], "done", labels[2], detail)
+
+                    next_node = _dash_next(node_name, full_state)
+                    if next_node and next_node in _dash_node_labels:
+                        next_labels = _dash_node_labels[next_node]
+                        await step_callback(next_labels[0], "running", next_labels[1], "")
+
         if result is None:
-            result = {}
+            result = full_state
     else:
         result = await agent.ainvoke(state, config)
 

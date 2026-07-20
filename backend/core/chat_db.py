@@ -503,6 +503,37 @@ def add_message(session_id: str, role: str, content: str, charts: list = None, s
     conn.commit()
 
 
+def clear_draft_message(session_id: str, new_content: str = ""):
+    """清除看板问卷草案消息的 ask_questions 和 pending_step
+
+    当用户提交问卷并完成看板生成后调用，避免刷新页面后草案消息再次出现。
+    new_content: 可选的新消息文本，替换原来的"请先告诉我一些基本信息"文本
+    """
+    conn = _get_conn()
+    cur = conn.execute(
+        "SELECT id, content FROM chat_messages WHERE session_id = ? AND role = 'assistant' AND pending_step = 'awaiting_questions' ORDER BY id DESC LIMIT 1",
+        (session_id,),
+    )
+    row = cur.fetchone()
+    if row:
+        msg_id = row[0]
+        content = new_content or row[1]
+        # 在 content 后添加标记，表示已完成
+        if new_content:
+            conn.execute(
+                "UPDATE chat_messages SET ask_questions_json = NULL, pending_step = NULL, content = ? WHERE id = ?",
+                (content, msg_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE chat_messages SET ask_questions_json = NULL, pending_step = NULL WHERE id = ?",
+                (msg_id,),
+            )
+        conn.commit()
+        return True
+    return False
+
+
 def save_agent_draft(session_id: str, draft_type: str, payload: dict, draft_id: str | None = None) -> str:
     """创建或更新结构化 Agent 草案，并返回稳定草案 ID。"""
     import uuid

@@ -149,7 +149,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { fetchFilterSelectOptions, FILTER_SELECT_API } from '@/api/filterSelect'
+import { ref, computed, watch, onMounted } from 'vue'
 
 interface OptionItem {
   label: string
@@ -166,10 +167,14 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
+const props = defineProps<{
+  prompt?: string
+  questions?: any[]
+}>()
+
 interface RawSignalItem {
   label: string
   value: string
-  rule_ids?: number[]
 }
 
 const DEFAULT_SLOT_MAP = [
@@ -210,16 +215,16 @@ const selectedTaskLabel = computed(() => {
 async function loadTasks(keyword: string = '') {
   taskLoading.value = true
   try {
-    const url = keyword ? `/api/functions/tasks?keyword=${encodeURIComponent(keyword)}` : '/api/functions/tasks'
-    const r = await fetch(url)
-    if (r.ok) {
-      const data = await r.json()
-      taskOptions.value = data.map((t: any) => ({
-        label: `${t.TASK_NAME}(${t.TASK_ID})`,
-        name: t.TASK_NAME,
-        value: String(t.TASK_ID),
-      }))
-    }
+    const data = await fetchFilterSelectOptions({
+      filters: [],
+      focusField: "task",
+      keyword: keyword
+    }) as any
+    taskOptions.value = (data.dropDown || []).map((t: any) => ({
+      label: `${t.name}(${t.id})`,
+      name: t.name,
+      value: String(t.id),
+    }))
   } catch {}
   taskLoading.value = false
 }
@@ -246,14 +251,14 @@ async function loadRules() {
   if (!taskId.value) return
   ruleLoading.value = true
   try {
-    const r = await fetch(`/api/functions/rules?task_id=${taskId.value}`)
-    if (r.ok) {
-      const data = await r.json()
-      ruleOptions.value = data.map((item: any) => ({
-        label: item.RULE_NAME,
-        value: String(item.TASK_RULE_ID),
-      }))
-    }
+    const data = await fetchFilterSelectOptions({
+      filters: [{field: 'task', op: 'in', value: [taskId.value]}],
+      focusField: "rule_name",
+    }) as any
+    ruleOptions.value = (data.dropDown || []).map((item: any) => ({
+      label: item.name,
+      value: String(item.id),
+    }))
   } catch {}
   ruleLoading.value = false
 }
@@ -267,6 +272,7 @@ function onRuleClick(rule: OptionItem) {
     selectedRules.value.push(rule.value)
   }
   selectedRules.value = [...selectedRules.value] // trigger reactivity
+  loadSignals()
 }
 
 // Signals
@@ -277,10 +283,7 @@ const selectedSignals = ref<string[]>([])
 /** 根据选中规则过滤后的信号列表 */
 const filteredSignals = computed(() => {
   if (selectedRules.value.length === 0) return signalOptions.value
-  return signalOptions.value.filter(s => {
-    if (!s.rule_ids || s.rule_ids.length === 0) return true
-    return selectedRules.value.some(rid => s.rule_ids!.includes(Number(rid)))
-  })
+  return signalOptions.value
 })
 
 /** 点击信号切换选中态 */
@@ -298,15 +301,17 @@ async function loadSignals() {
   if (!taskId.value) return
   signalLoading.value = true
   try {
-    const r = await fetch(`/api/functions/signals?task_id=${taskId.value}`)
-    if (r.ok) {
-      const data = await r.json()
-      signalOptions.value = data.map((s: any) => ({
-        label: `${s.signal_name}`,
-        value: s.signal_name,
-        rule_ids: s.rule_ids,
-      })).filter(x => !(x.value?.includes('(') || x.value?.includes(')')))
-    }
+    const data = await fetchFilterSelectOptions({
+      filters: [
+        {field: 'task', op: 'in', value: [taskId.value]},
+        {field: 'rule_name', op: 'in', value: selectedRules.value},
+      ],
+      focusField: "signal",
+    }) as any
+    signalOptions.value = (data.signalList || []).map((s: any) => ({
+      label: s,
+      value: s,
+    })).filter(x => !(x.value?.includes('(') || x.value?.includes(')')))
   } catch {}
   signalLoading.value = false
 }
@@ -385,8 +390,31 @@ function onChartCountChange() {
 }
 
 // Initialize
+onMounted(async () => {
+  // 从 questions 中读取预填的任务信息
+  const taskQuestion = props.questions?.find((q: any) => q.id === 'task_id')
+  if (taskQuestion?.preset_value) {
+    taskId.value = taskQuestion.preset_value
+    taskSearchKeyword.value = taskQuestion.preset_label || ''
+    // 先尝试从 API 按名称搜索加载任务列表
+    await loadTasks(taskSearchKeyword.value)
+    // 确保预设任务在选项中（API 可能未返回时作为兜底）
+    const exists = taskOptions.value.some(t => t.value === taskQuestion.preset_value)
+    if (!exists) {
+      taskOptions.value.unshift({
+        label: `${taskQuestion.preset_label}(${taskQuestion.preset_value})`,
+        value: taskQuestion.preset_value,
+        name: taskQuestion.preset_label,
+      })
+    }
+    // 加载该任务的规则和信号
+    loadRules()
+    loadSignals()
+  } else {
+    loadTasks()
+  }
+})
 onChartCountChange()
-loadTasks()
 
 // Drag & drop to textarea
 let dragInsertText = ''

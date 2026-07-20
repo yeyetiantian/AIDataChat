@@ -462,28 +462,70 @@ async def process_dtc(
 
     if step_callback:
         result = None
-        _dtc_node_order = ["analyze_dtc", "execute_dtc", "format_reply"]
         _dtc_node_labels = {
             "analyze_dtc": ("dtc.analyze", "分析 DTC 查询条件", "SQL 已生成"),
             "execute_dtc": ("dtc.execute", "执行 DTC 查询", "数据查询完成"),
             "format_reply": ("dtc.format", "整理 DTC 结果", "结果已整理"),
         }
-        node_idx = 0
-        async for output in build_dtc_agent().astream(
+        # 节点流转图（线性）
+        _node_next = {
+            "analyze_dtc": "execute_dtc",
+            "execute_dtc": "format_reply",
+            "format_reply": None,
+        }
+
+        def _dtc_detail(node_name: str, full: dict) -> str:
+            if node_name == "analyze_dtc":
+                exp = full.get("sql_explanation") or ""
+                if exp:
+                    return exp[:300]
+                return "已生成查询 SQL"
+            elif node_name == "execute_dtc":
+                info = full.get("query_result_info") or {}
+                trigger = full.get("query_result_trigger") or {}
+                parts = []
+                if info and info.get("success"):
+                    parts.append(f"dtc_info: {info.get('total', 0)}条")
+                if trigger and trigger.get("success"):
+                    parts.append(f"dtc_trigger: {trigger.get('total', 0)}条")
+                return "、".join(parts) if parts else "查询完成"
+            elif node_name == "format_reply":
+                reply = full.get("reply") or ""
+                if reply:
+                    return reply[:300]
+                return "结果已整理"
+            return ""
+
+        full_state = dict(state)
+        # 先推送第一个节点的 running
+        entry = _dtc_node_labels["analyze_dtc"]
+        await step_callback(entry[0], "running", entry[1], "")
+
+        async for update in build_dtc_agent().astream(
             state,
             {"configurable": {"thread_id": str(uuid.uuid4())}},
-            stream_mode="values",
+            stream_mode="updates",
         ):
-            if node_idx < len(_dtc_node_order):
-                node_name = _dtc_node_order[node_idx]
-                node_idx += 1
-                labels = _dtc_node_labels.get(node_name)
-                if labels:
-                    await step_callback(labels[0], "done", labels[2])
-            if isinstance(output, dict):
-                result = output
+            for node_name, partial in update.items():
+                full_state.update(partial)
+                result = full_state
+
+                if node_name in _dtc_node_labels:
+                    labels = _dtc_node_labels[node_name]
+                    detail = _dtc_detail(node_name, full_state)
+                    if full_state.get("error") and node_name != "format_reply":
+                        await step_callback(labels[0], "error", labels[2], f"出错: {full_state['error']}")
+                    else:
+                        await step_callback(labels[0], "done", labels[2], detail)
+
+                    # 推送下一个节点的 running
+                    next_node = _node_next.get(node_name)
+                    if next_node and next_node in _dtc_node_labels:
+                        next_labels = _dtc_node_labels[next_node]
+                        await step_callback(next_labels[0], "running", next_labels[1], "")
+
         if result is None:
-            result = {}
+            result = full_state
     else:
         result = await build_dtc_agent().ainvoke(
             state,
