@@ -93,7 +93,7 @@
                 :prompt="msg.content"
                 :questions="msg.ask_questions"
                 @submit="handleQuestionSubmit($event, msg)"
-                @cancel="() => {}"
+                @cancel="handleCancel(msg)"
               />
             </div>
             <div v-if="msg.charts?.length" class="msg-charts">
@@ -316,6 +316,19 @@ async function handleQuestionSubmit(answers: Record<string, any>, msg: any) {
     },
   })
   scrollToBottom()
+}
+
+/** 取消问卷：关闭面板，不调 LLM，等待用户重新输入 */
+function handleCancel(msg: any) {
+  msg.ask_questions = []
+  msg.pending_step = null
+  msg.content = '⚠️ 看板问卷已取消，请输入其他需求。'
+  // 同步清理数据库中的草案消息
+  const sessionId = chatStore.activeSessionId
+  if (sessionId) {
+    fetch('/api/chat/cancel-draft?session_id=' + encodeURIComponent(sessionId), { method: 'POST' })
+      .catch(() => {})
+  }
 }
 
 function toggleFullscreenChart(msgIdx: number, chartIdx: number) {

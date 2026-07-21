@@ -225,3 +225,13 @@ async def chat_query_stream(request: ChatRequest):
             "session-id": session_id,
         },
     )
+
+
+@router.post("/chat/cancel-draft")
+async def cancel_draft(session_id: str):
+    """取消看板问卷，清除 DB 中的草案消息"""
+    cleared = clear_draft_message(
+        session_id,
+        new_content="⚠️ 看板问卷已取消",
+    )
+    return {"success": cleared, "session_id": session_id}

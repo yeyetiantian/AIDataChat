@@ -147,6 +147,7 @@
 <script setup lang="ts">
 import { fetchFilterSelectOptions, FILTER_SELECT_API } from '@/api/filterSelect'
 import { ref, computed, watch, onMounted } from 'vue'
+import dayjs from 'dayjs'
 
 interface OptionItem {
   label: string
@@ -250,15 +251,20 @@ async function fetchTaskTimeRange(taskIdStr: string) {
     const resp = await fetch(`/api/functions/tasks/${taskIdStr}`)
     if (resp.ok) {
       const data = await resp.json()
-      const start = data.TASK_START_TIME
-      const end = data.TASK_END_TIME
-      if (start && end) {
-        taskTimeMin.value = start
-        taskTimeMax.value = end
-        dateRange.value = [start, end]
+      const taskStart = data.TASK_START_TIME
+      const taskEnd = data.TASK_END_TIME
+      if (taskStart && taskEnd) {
+        // 在全局范围 [2025-05-29, 2026-07-01] 内裁剪
+        const ABS_MIN = dayjs('2025-05-29 00:00:00')
+        const ABS_MAX = dayjs('2026-07-01 23:59:59')
+        const start = dayjs(taskStart)
+        const end = dayjs(taskEnd)
+        taskTimeMin.value = start.isBefore(ABS_MIN) ? ABS_MIN.format('YYYY-MM-DD HH:mm:ss') : taskStart
+        taskTimeMax.value = end.isAfter(ABS_MAX) ? ABS_MAX.format('YYYY-MM-DD HH:mm:ss') : taskEnd
+        dateRange.value = [taskTimeMin.value, taskTimeMax.value]
       }
     }
-  } catch { 
+  } catch {
     const start = '2025-05-29 00:00:00'
     const end = '2026-07-01 23:59:59'
     taskTimeMin.value = start
