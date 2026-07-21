@@ -90,6 +90,19 @@ async def get_reference_tasks(keyword: str = Query("", description="搜索关键
     return [dict(r) for r in rows]
 
 
+@router.get("/tasks/{task_id}")
+async def get_task_detail(task_id: int):
+    """获取单个任务的详细信息（含时间范围）"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT TASK_ID, TASK_NAME, TASK_START_TIME, TASK_END_TIME FROM ext_tasks WHERE TASK_ID = ?",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return dict(row)
+
+
 @router.get("/rules", response_model=list[RuleItem])
 async def get_reference_rules(task_id: int | None = Query(None, description="按任务ID筛选"), keyword: str = Query("", description="搜索关键词")):
     """获取所有规则（下拉选择用，支持任务筛选和关键词搜索）"""

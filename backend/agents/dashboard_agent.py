@@ -46,17 +46,28 @@ def _extract_task_from_message(user_msg: str) -> tuple[str | None, str | None]:
 
     采用多策略级联：
       1. 精确子串匹配 — TASK_NAME 是 user_msg 的子串
-      2. 自然语言提取 — 从“为XX创建看板”模式关键词 → 去空格模糊匹配
-      3. 任意 token 匹配 — user_msg 中 ≥2 字符的片段逐条匹配
+      2. 去空格精确匹配 — 去除所有空格后精确匹配（处理输入与 DB 空格差异）
+      3. 自然语言提取 — 从“为XX创建看板”模式关键词 → 去空格模糊匹配
+      4. 任意 token 匹配 — user_msg 中 ≥2 字符的片段逐条匹配（最长优先）
     """
     try:
         from core.chat_db import _get_conn
         conn = _get_conn()
 
-        # 策略1: 精确子串匹配（任务全名在用户输入中）
+        # 策略1: 精确子串匹配 — 取 TASK_NAME 最长的（最长即最精确）
         cur = conn.execute(
-            "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE ? LIKE '%' || TASK_NAME || '%' AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
+            "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE ? LIKE '%' || TASK_NAME || '%' AND (IS_DELETE IS NULL OR IS_DELETE = 0) ORDER BY LENGTH(TASK_NAME) DESC LIMIT 1",
             (user_msg,),
+        )
+        row = cur.fetchone()
+        if row:
+            return str(row[0]), row[1]
+
+        # 策略2: 去空格精确匹配（处理输入与 DB 之间的空格差异）
+        normalized_msg = user_msg.replace(' ', '')
+        cur = conn.execute(
+            "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE REPLACE(TASK_NAME, ' ', '') = ? AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
+            (normalized_msg,),
         )
         row = cur.fetchone()
         if row:
@@ -64,7 +75,7 @@ def _extract_task_from_message(user_msg: str) -> tuple[str | None, str | None]:
 
         import re
 
-        # 策略2: 从“为XX创建看板”“给XX看板”“关联XX看板”中提取关键词
+        # 策略3: 从“为XX创建看板”“给XX看板”“关联XX看板”中提取关键词
         patterns = [
             r'[为给关联对](.+?)(?:的)?(?:创建|建立|新建|做一个?|生成)(?:的)?(?:看板|仪表盘|大屏)',
             r'[为给关联对](.+?)(?:的)?(?:看板|仪表盘|大屏)',
@@ -75,7 +86,6 @@ def _extract_task_from_message(user_msg: str) -> tuple[str | None, str | None]:
             if m:
                 keyword = m.group(1).strip()
                 if len(keyword) >= 2:
-                    # 去除空格后再匹配（用户打字习惯与数据库可能不同）
                     no_space = keyword.replace(' ', '')
                     cur = conn.execute(
                         "SELECT TASK_ID, TASK_NAME FROM ext_tasks WHERE REPLACE(TASK_NAME, ' ', '') LIKE ? AND (IS_DELETE IS NULL OR IS_DELETE = 0) LIMIT 1",
@@ -85,8 +95,9 @@ def _extract_task_from_message(user_msg: str) -> tuple[str | None, str | None]:
                     if row:
                         return str(row[0]), row[1]
 
-        # 策略3: 用 user_msg 中的每个 ≥2 字符 token 去模糊匹配
+        # 策略4: 用 user_msg 中的每个 ≥2 字符 token 去模糊匹配（最长优先）
         tokens = [t for t in re.split(r'[\s,，、]+', user_msg) if len(t) >= 2]
+        tokens.sort(key=len, reverse=True)  # 最长 token 优先，避免"ND"误匹配
         for token in tokens:
             no_space_token = token.replace(' ', '')
             cur = conn.execute(

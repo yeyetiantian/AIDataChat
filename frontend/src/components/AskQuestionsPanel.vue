@@ -3,11 +3,7 @@
     <!-- 图表数量 -->
     <div class="ask-item">
       <div class="ask-label">需要展示多少个图表？</div>
-      <el-select v-model="chartCount" style="width:100%" @change="onChartCountChange">
-        <el-option v-for="n in 4" :key="n" :label="(2 + n) + '个'" :value="2 + n"
-          ><span v-if="2+n===6">⭐ </span>{{ 2 + n }}个</el-option
-        >
-      </el-select>
+      <el-slider v-model="chartCount" :step="1" show-stops :min="3" :max="6" show-input/>
     </div>
 
     <!-- 任务选择 -->
@@ -188,12 +184,16 @@ const DEFAULT_SLOT_MAP = [
 
 // Chart count
 const chartCount = ref(6)
-const dateRange = ref<[String | null, String | null] | null>(['2025-08-29 00:00:00', '2025-09-04 23:59:59'])
 
-/** 限制日期选择范围为 2025-05-29 ~ 2026-07-01 */
+/** 日期范围边界（由选中任务决定） */
+const taskTimeMin = ref('2025-05-29 00:00:00')
+const taskTimeMax = ref('2026-07-01 23:59:59')
+const dateRange = ref<[String | null, String | null] | null>([taskTimeMin.value.slice(0, 10), taskTimeMax.value.slice(0, 10)])
+
+/** 限制日期选择范围 */
 const disabledDate = (time: Date) => {
-  const min = new Date('2025-05-29 00:00:00').getTime()
-  const max = new Date('2026-07-01 23:59:59').getTime()
+  const min = new Date(taskTimeMin.value.replace(' ', 'T')).getTime()
+  const max = new Date(taskTimeMax.value.replace(' ', 'T')).getTime()
   return time.getTime() < min || time.getTime() > max
 }
 
@@ -238,8 +238,33 @@ function selectTask(task: OptionItem) {
   if (task.value !== taskId.value) {
     taskId.value = task.value
     onTaskChange()
+    // 获取任务的时间范围
+    fetchTaskTimeRange(task.value)
   }
   taskDialogVisible.value = false
+}
+
+/** 根据任务ID获取任务的开始和结束时间，更新日期选择范围 */
+async function fetchTaskTimeRange(taskIdStr: string) {
+  try {
+    const resp = await fetch(`/api/functions/tasks/${taskIdStr}`)
+    if (resp.ok) {
+      const data = await resp.json()
+      const start = data.TASK_START_TIME
+      const end = data.TASK_END_TIME
+      if (start && end) {
+        taskTimeMin.value = start
+        taskTimeMax.value = end
+        dateRange.value = [start, end]
+      }
+    }
+  } catch { 
+    const start = '2025-05-29 00:00:00'
+    const end = '2026-07-01 23:59:59'
+    taskTimeMin.value = start
+    taskTimeMax.value = end
+    dateRange.value = [start, end]
+  }
 }
 
 // Rules
@@ -410,6 +435,8 @@ onMounted(async () => {
     // 加载该任务的规则和信号
     loadRules()
     loadSignals()
+    // 拉取任务时间范围并更新日期选择
+    fetchTaskTimeRange(taskQuestion.preset_value)
   } else {
     loadTasks()
   }
