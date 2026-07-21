@@ -63,12 +63,9 @@ def get_token() -> str:
 def get_auth_headers() -> dict[str, str]:
     """获取认证请求头（含 client_id，部分私有 LLM 需要在请求中传入）"""
     token = get_token()
-    client_id = os.getenv("PRIVATE_LLM_CLIENT_ID", "")
+    api_key = os.getenv("PRIVATE_LLM_API_KEY")
     return {
-        "access_token": token,
-        "client_id": client_id,
+        "X-API-KEY": api_key,
+        "Authorization": "Bearer " + token,
         "Content-Type": "application/json",
-        "Connection": "close",
-        "apiTag": "V1",
-        "clientRequestId": "01",
     }

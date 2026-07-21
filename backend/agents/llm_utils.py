@@ -60,11 +60,12 @@ def get_llm() -> Any:
 
     if is_private_provider():
         api_url = os.getenv("PRIVATE_LLM_API_URL")
-        model = os.getenv("PRIVATE_LLM_MODEL", "qwen-27b")
+        model = os.getenv("PRIVATE_LLM_MODEL")
+        api_key = os.getenv("PRIVATE_LLM_API_KEY")
         from llm import get_auth_headers
         headers = get_auth_headers()
         _llm_instance = ChatOpenAI(
-            model=model, temperature=_TEMPERATURE, api_key="sk-placeholder",
+            model=model, temperature=_TEMPERATURE, api_key=api_key,
             base_url=api_url, default_headers=headers,
         )
     else:
