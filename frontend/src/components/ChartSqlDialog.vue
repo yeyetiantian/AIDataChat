@@ -38,7 +38,7 @@ async function copyContent() {
     copyCon = JSON.stringify(copyCon)
   }
   try {
-    await navigator.clipboard.writeText(content.value)
+    await navigator.clipboard.writeText(copyCon)
     ElMessage.success('已复制')
   } catch {
     // fallback
