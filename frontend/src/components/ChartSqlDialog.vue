@@ -1,7 +1,7 @@
 <template>
   <ModelDialog ref="modelRef" :title="title" width="600px" top="8vh" >
     <div class="sql-toolbar">
-      <el-button size="small" @click="copyContent">
+      <el-button v-if="content" size="small" @click="copyContent">
         <el-icon><DocumentCopy /></el-icon>
         复制
       </el-button>
@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, toRaw } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentCopy } from '@element-plus/icons-vue'
 import ModelDialog from './ModelDialog.vue'
@@ -32,6 +32,10 @@ async function copyContent() {
   if (!content.value) {
     ElMessage.info('无内容可复制')
     return
+  }
+  let copyCon = toRaw(content.value)
+  if (typeof copyCon === 'object') {
+    copyCon = JSON.stringify(copyCon)
   }
   try {
     await navigator.clipboard.writeText(content.value)

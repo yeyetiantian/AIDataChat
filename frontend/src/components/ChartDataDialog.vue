@@ -13,7 +13,7 @@
         </template>
       </el-input>
       <span class="data-count">共 {{ filteredData.length }} 条</span>
-      <el-button size="small" @click="handleExport">
+      <el-button v-if="data && data.length" size="small" @click="handleExport">
         <el-icon><Download /></el-icon> 导出 CSV
       </el-button>
     </div>
